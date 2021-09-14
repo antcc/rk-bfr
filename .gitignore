@@ -1,0 +1,5 @@
+# Ignore virtual environment files
+flr/
+
+# Ignore jupyter notebook files
+.ipynb_checkpoints/
