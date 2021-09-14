@@ -1,5 +1,5 @@
 # Ignore virtual environment files
-flr/
+venv-flr-39/
 
 # Ignore jupyter notebook files
 .ipynb_checkpoints/
