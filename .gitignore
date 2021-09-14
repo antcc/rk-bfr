@@ -1,5 +1,7 @@
 # Ignore virtual environment files
 venv-flr-py39/
+__pycache__
+
 
 # Ignore jupyter notebook files
 .ipynb_checkpoints/
