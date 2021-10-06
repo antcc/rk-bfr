@@ -3,5 +3,7 @@ venv-flr-py39/
 __pycache__
 
 
+# Ignore pickled files
+*.mcmc
 # Ignore jupyter notebook files
 .ipynb_checkpoints/
