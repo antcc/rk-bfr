@@ -6,6 +6,7 @@ __pycache__
 # Ignore pickled files
 *.mcmc
 *.idata
+*.nc
 
 # Ignore jupyter notebook files
 .ipynb_checkpoints/

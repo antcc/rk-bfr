@@ -35,7 +35,7 @@ def plot_dataset(X, Y, grid, plot_means=True):
 
     axs[0].set_title(r"(Some) functional regressors $X_i(t)$")
     axs[0].set_xlabel(r"$t$")
-    axs[0].plot(grid, X.T[:, :n//4], alpha=0.8)
+    axs[0].plot(grid, X.T[:, :n//2], alpha=0.8)
 
     axs[1].set_yticks([])
     axs[1].set_title(r"Scalar values $Y_i$")
