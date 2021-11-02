@@ -4,9 +4,19 @@ import numpy as np
 from matplotlib import pyplot as plt
 import arviz as az
 from tqdm.notebook import tqdm
+from sklearn.metrics import r2_score
 from arviz.stats.stats_utils import make_ufunc
 from arviz.plots.plot_utils import calculate_point_estimate
 import xarray as xr
+
+
+def cov_matrix(kernel_fn, s, t):
+    ss, tt = np.meshgrid(s, t, indexing='ij')
+
+    # Evaluate the kernel over meshgrid (vectorized operation)
+    K = kernel_fn(ss, tt)
+
+    return K
 
 
 def generate_response(X, theta, noise=True, rng=None):
@@ -31,15 +41,6 @@ def generate_response(X, theta, noise=True, rng=None):
         Y += sigma*rng.standard_normal(size=n)
 
     return Y
-
-
-def cov_matrix(kernel_fn, s, t):
-    ss, tt = np.meshgrid(s, t, indexing='ij')
-
-    # Evaluate the kernel over meshgrid (vectorized operation)
-    K = kernel_fn(ss, tt)
-
-    return K
 
 
 def generate_gp_dataset(grid, kernel_fn, n_samples, theta, rng=None):
@@ -83,6 +84,60 @@ def plot_dataset(X, Y, plot_means=True):
         axs[1].legend()
 
 
+def initial_guess_random(p, sd_beta, sd_alpha0, sd_log_sigma, n_walkers=1, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+
+    beta_init = sd_beta*rng.standard_normal(size=(n_walkers, p))
+    tau_init = rng.uniform(size=(n_walkers, p))
+    alpha0_init = sd_alpha0*rng.standard_normal(size=(n_walkers, 1))
+    log_sigma_init = sd_log_sigma*rng.standard_normal(size=(n_walkers, 1))
+
+    init = np.hstack((
+        beta_init,
+        tau_init,
+        alpha0_init,
+        log_sigma_init
+    ))
+
+    return init if n_walkers > 1 else init[0]
+
+
+def intial_guess_around_value(
+        value, sd_beta=1, sd_tau=0.1, sd_alpha0=1,
+        sd_log_sigma=0.5, n_walkers=1, rng=None):
+    assert len(value) % 2 == 0
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    p = (len(value) - 2)//2
+
+    beta_jitter = sd_beta*rng.standard_normal(size=(n_walkers, p))
+    tau_jitter = sd_tau*rng.standard_normal(size=(n_walkers, p))
+    alpha0_jitter = sd_alpha0*rng.standard_normal(size=(n_walkers, 1))
+    log_sigma_jitter = sd_log_sigma*rng.standard_normal(size=(n_walkers, 1))
+
+    jitter = np.hstack((
+        beta_jitter,
+        tau_jitter,
+        alpha0_jitter,
+        log_sigma_jitter
+    ))
+
+    init_jitter = value[np.newaxis, :] + jitter
+
+    # Restrict tau to [0, 1]
+    init_jitter[:, p:2*p] = np.clip(init_jitter[:, p:2*p], 0.0, 1.0)
+
+    return init_jitter if n_walkers > 1 else init_jitter[0]
+
+
+def logdet(M):
+    s = np.linalg.svd(M, compute_uv=False)
+    return np.sum(np.log(np.abs(s)))
+
+
 def plot_histogram(samples, nrows, ncols, labels, figsize=(10, 10)):
     """Plot histogram of 'samples', which is an ndarray of (nchains, n_dim)."""
     n_dim = samples.shape[-1]
@@ -122,23 +177,42 @@ def plot_evolution(trace, labels):
     axes[-1].set_xlabel("step")
 
 
-def plot_ppc(idata, n_samples=None, ax=None, **kwargs):
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    az.plot_ppc(idata, ax=ax, num_pp_samples=n_samples, **kwargs)
-
-    if "observed_data" in idata:
-        ax.axvline(idata.observed_data["y_obs"].mean(), ls="--",
-                   color="r", lw=2, label="Observed mean")
-        ax.legend()
 
 
-def get_mode_func():
-    def mode(x):
-        return calculate_point_estimate('mode', x)
+def emcee_to_idata(sampler, p, names, names_aux, burn, thin, ppc=False):
+    var_names = names[:-1] + names_aux
 
-    return mode
+    if ppc:
+        idata = az.from_emcee(
+            sampler,
+            var_names=var_names,
+            slices=[slice(0, p), slice(p, 2*p), -2, -1],
+            arg_names=["y_obs"],
+            blob_names=["y_rec"],
+            blob_groups=["posterior_predictive"],
+            dims={f"{names[0]}": ["projection"],
+                  f"{names[1]}": ["projection"],
+                  "y_obs": ["observed"],
+                  "y_rec": ["recovered"]}
+        )
+    else:
+        idata = az.from_emcee(
+            sampler,
+            var_names=var_names,
+            slices=[slice(0, p), slice(p, 2*p), -2, -1],
+            arg_names=["y_obs"],
+            dims={f"{names[0]}": ["projection"],
+                  f"{names[1]}": ["projection"],
+                  "y_obs": ["observed"]},
+        )
+
+    # Burn-in and thinning
+    idata = idata.sel(draw=slice(burn, None, thin))
+
+    # Recover sigma^2
+    idata.posterior[names[-1]] = np.exp(idata.posterior[names_aux[0]])**2
+
+    return idata
 
 
 # TODO: improve inner for loop and change generate_response so that it can handle
@@ -190,50 +264,35 @@ def ppc_to_idata(ppc, idata, y_name, y_obs=None):
     return idata_ppc
 
 
+def plot_ppc(idata, n_samples=None, ax=None, **kwargs):
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    az.plot_ppc(idata, ax=ax, num_pp_samples=n_samples, **kwargs)
+
+    if "observed_data" in idata:
+        ax.axvline(idata.observed_data["y_obs"].mean(), ls="--",
+                   color="r", lw=2, label="Observed mean")
+        ax.legend()
+
+
+def get_mode_func():
+    def mode(x):
+        return calculate_point_estimate('mode', x)
+
+    return mode
+
+
+def compute_mode(data):
+    mode_func = get_mode_func()
+    return xr.apply_ufunc(
+        make_ufunc(mode_func), data,
+        input_core_dims=(("chain", "draw"),))
+
+
 def summary(data, **kwargs):
     return az.summary(data, extend=True,
                       stat_funcs={"mode": get_mode_func()}, **kwargs)
-
-
-def logdet(M):
-    s = np.linalg.svd(M, compute_uv=False)
-    return np.sum(np.log(np.abs(s)))
-
-
-def emcee_to_idata(sampler, p, names, names_aux, burn, thin, ppc=False):
-    var_names = names[:-1] + names_aux
-
-    if ppc:
-        idata = az.from_emcee(
-            sampler,
-            var_names=var_names,
-            slices=[slice(0, p), slice(p, 2*p), -2, -1],
-            arg_names=["y_obs"],
-            blob_names=["y_rec"],
-            blob_groups=["posterior_predictive"],
-            dims={f"{names[0]}": ["projection"],
-                  f"{names[1]}": ["projection"],
-                  "y_obs": ["observed"],
-                  "y_rec": ["recovered"]}
-        )
-    else:
-        idata = az.from_emcee(
-            sampler,
-            var_names=var_names,
-            slices=[slice(0, p), slice(p, 2*p), -2, -1],
-            arg_names=["y_obs"],
-            dims={f"{names[0]}": ["projection"],
-                  f"{names[1]}": ["projection"],
-                  "y_obs": ["observed"]},
-        )
-
-    # Burn-in and thinning
-    idata = idata.sel(draw=slice(burn, None, thin))
-
-    # Recover sigma^2
-    idata.posterior[names[-1]] = np.exp(idata.posterior[names_aux[0]])**2
-
-    return idata
 
 
 def point_predict(X, idata, names, point_estimate='mean', rng=None):
@@ -260,61 +319,13 @@ def point_predict(X, idata, names, point_estimate='mean', rng=None):
     return Y_hat
 
 
-def compute_mode(data):
-    mode_func = get_mode_func()
-    return xr.apply_ufunc(
-        make_ufunc(mode_func), data,
-        input_core_dims=(("chain", "draw"),))
+def regression_metrics(y, y_hat):
+    """Quantify the goodness-of-fit of a regression model."""
+    mse = np.mean((y - y_hat)**2)
+    r2 = r2_score(y, y_hat)
 
-
-def mse(y, y_hat):
-    return np.mean((y - y_hat)**2)
-
-
-def initial_guess_random(p, sd_beta, sd_alpha0, sd_log_sigma, n_walkers=1, rng=None):
-    if rng is None:
-        rng = np.random.default_rng()
-
-    beta_init = sd_beta*rng.standard_normal(size=(n_walkers, p))
-    tau_init = rng.uniform(size=(n_walkers, p))
-    alpha0_init = sd_alpha0*rng.standard_normal(size=(n_walkers, 1))
-    log_sigma_init = sd_log_sigma*rng.standard_normal(size=(n_walkers, 1))
-
-    init = np.hstack((
-        beta_init,
-        tau_init,
-        alpha0_init,
-        log_sigma_init
-    ))
-
-    return init if n_walkers > 1 else init[0]
-
-
-def intial_guess_around_value(
-        value, sd_beta=1, sd_tau=0.1, sd_alpha0=1,
-        sd_log_sigma=0.5, n_walkers=1, rng=None):
-    assert len(value) % 2 == 0
-
-    if rng is None:
-        rng = np.random.default_rng()
-
-    p = (len(value) - 2)//2
-
-    beta_jitter = sd_beta*rng.standard_normal(size=(n_walkers, p))
-    tau_jitter = sd_tau*rng.standard_normal(size=(n_walkers, p))
-    alpha0_jitter = sd_alpha0*rng.standard_normal(size=(n_walkers, 1))
-    log_sigma_jitter = sd_log_sigma*rng.standard_normal(size=(n_walkers, 1))
-
-    jitter = np.hstack((
-        beta_jitter,
-        tau_jitter,
-        alpha0_jitter,
-        log_sigma_jitter
-    ))
-
-    init_jitter = value[np.newaxis, :] + jitter
-
-    # Restrict tau to [0, 1]
-    init_jitter[:, p:2*p] = np.clip(init_jitter[:, p:2*p], 0.0, 1.0)
-
-    return init_jitter if n_walkers > 1 else init_jitter[0]
+    metrics = {
+        "mse": mse,
+        "r2": r2
+    }
+    return metrics
