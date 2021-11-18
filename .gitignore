@@ -3,8 +3,11 @@ venv*
 __pycache__
 
 # Ignore temp files
-TODO.md
-DUDAS.md
+_*.md
+_*.txt
+
+# Ignore results files
+*.results
 
 # Ignore pickled files
 *.mcmc
