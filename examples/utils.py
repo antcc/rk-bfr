@@ -20,6 +20,7 @@ class Identity():
     def backward(self, y):
         return y
 
+
 class Logit():
     eps = 1e-6
 
@@ -194,6 +195,24 @@ def generate_response(X, theta, noise=True, rng=None):
     return Y
 
 
+def threshold(y):
+    return 1 if y >= 0 else 0
+
+
+def generate_response_logistic(X, theta, prob=True, rng=None):
+    """Generate a response when the parameter vector 'theta' is (β, τ, α0, σ2)."""
+    assert len(theta) % 2 == 0
+
+    Y_lin = generate_response(X, theta, noise=False)
+
+    if prob:
+        Y = transform_linear_response(Y_lin, rng=rng)
+    else:
+        Y = [threshold(y) for y in Y_lin]
+
+    return Y
+
+
 def gp(grid, kernel_fn, n_samples, rng=None):
     if rng is None:
         rng = np.random.default_rng()
@@ -218,8 +237,9 @@ def generate_gp_l2_dataset(
     beta = beta_coef(grid)
 
     X = gp(grid, kernel_fn, n_samples, rng)
-    Y = (alpha0 + trapz(y=X*beta, x=grid)
-         + np.sqrt(sigma2)*rng.standard_normal(size=n_samples))
+    Y = alpha0 + trapz(y=X*beta, x=grid)
+    if sigma2 > 0.0:
+        Y += np.sqrt(sigma2)*rng.standard_normal(size=n_samples)
 
     return X, Y
 
@@ -236,13 +256,23 @@ def generate_gp_rkhs_dataset(
         [alpha0], [sigma2]
     ))
 
-    Y = generate_response(X, theta_true, rng=rng)
+    add_noise = sigma2 > 0.0
+    Y = generate_response(X, theta_true, noise=add_noise, rng=rng)
 
     return X, Y
 
 
-def plot_dataset(X, Y, plot_means=True):
-    fig, axs = plt.subplots(1, 2, figsize=(9, 4))
+def transform_linear_response(Y_lin, rng):
+    if rng is None:
+        rng = np.random.default_rng()
+
+    Y = rng.binomial(1, expit(Y_lin))
+
+    return Y
+
+
+def plot_dataset(X, Y, plot_means=True, figsize=(9, 4)):
+    fig, axs = plt.subplots(1, 2, figsize=figsize)
     n, N = X.shape
     grid = np.linspace(1./N, 1., N)
 
@@ -264,6 +294,39 @@ def plot_dataset(X, Y, plot_means=True):
 
         axs[1].axvline(Y.mean(), ls="--", lw=2, color="r", label="Sample mean")
         axs[1].legend()
+
+
+def plot_dataset_classification(X, Y, plot_means=True, figsize=(5, 4)):
+    fig = plt.figure(figsize=figsize)
+    n, N = X.shape
+    grid = np.linspace(1./N, 1., N)
+    label0 = Y == 0
+    label1 = Y == 1
+
+    plt.title(r"(Some) functional regressors $X_i(t)$ labeled according to $Y_i$")
+    plt.xlabel(r"$t$")
+    if sum(label0) > 0:
+        plt.plot(grid, X.T[:, (Y == 0)], alpha=0.5, color="blue",
+                 label=["Class 0"] + [""]*(sum(Y == 0) - 1))
+    if sum(label1) > 0:
+        plt.plot(grid, X.T[:, Y == 1], alpha=0.5, color="red",
+                 label=["Class 1"] + [""]*(sum(Y == 1) - 1))
+
+    if plot_means:
+        plt.plot(
+            grid, np.mean(X, axis=0),
+            linewidth=3, color='k',
+            label="Sample mean")
+
+    plt.legend(fontsize=8)
+
+
+def compute_bic(theta_space, neg_ll, mles, X, Y):
+    n = X.shape[0]
+    bics = np.array([theta_space.ndim*np.log(n) + 2*neg_ll(mle_theta, X, Y, theta_space)
+                     for mle_theta in mles])
+
+    return bics[0] if len(mles) == 1 else bics
 
 
 def initial_guess_random(
@@ -357,6 +420,7 @@ def weighted_initial_guess_around_value(
     rng.shuffle(init)
 
     return init
+
 
 def logdet(M):
     s = np.linalg.svd(M, compute_uv=False)
@@ -457,7 +521,7 @@ def emcee_to_idata(sampler, theta_space, burn, thin, ppc=False):
 
 # TODO: improve inner for loop and change generate_response so that it can handle
 # multiple thetas and return a matrix of (n_thetas, n) (or the transpose)
-def generate_ppc(idata, X, var_names, thin=1, rng=None):
+def generate_ppc(idata, X, var_names, thin=1, rng=None, kind='regression'):
     if rng is None:
         rng = np.random.default_rng()
 
@@ -465,15 +529,22 @@ def generate_ppc(idata, X, var_names, thin=1, rng=None):
     posterior_trace = idata.posterior
     n_chain = len(posterior_trace["chain"])
     n_draw = len(posterior_trace["draw"])
-    ppc = np.zeros((n_chain, n_draw, n))
+    range_draws = range(0, n_draw, thin)
+    ppc = np.zeros((n_chain, len(range_draws), n))
 
     for i in tqdm(range(n_chain), "Posterior predictive samples"):
-        for j in range(0, n_draw, thin):
+        for j, jj in enumerate(range_draws):
             theta_ds = posterior_trace[var_names].isel(
-                chain=i, draw=j).data_vars.values()
+                chain=i, draw=jj).data_vars.values()
             theta = np.concatenate([param.values.ravel()
                                     for param in theta_ds])
-            ppc[i, j, :] = generate_response(X, theta, rng=rng)
+
+            if kind == 'regression':
+                Y_hat = generate_response(X, theta, rng=rng)
+            else:
+                Y_hat = generate_response_logistic(X, theta, rng=rng)
+
+            ppc[i, j, :] = Y_hat
 
     return ppc
 
@@ -504,16 +575,27 @@ def ppc_to_idata(ppc, idata, y_name, y_obs=None):
     return idata_ppc
 
 
-def plot_ppc(idata, n_samples=None, ax=None, **kwargs):
+def plot_ppc(idata, n_samples=None, ax=None, legend=False, **kwargs):
     if ax is None:
         fig, ax = plt.subplots()
 
     az.plot_ppc(idata, ax=ax, num_pp_samples=n_samples, **kwargs)
 
-    if "observed_data" in idata:
+    if legend and "observed_data" in idata:
         ax.axvline(idata.observed_data["y_obs"].mean(), ls="--",
                    color="r", lw=2, label="Observed mean")
         ax.legend()
+
+
+def bpv(ppc, Y, t_stat):
+    """Compute bayesian p-values for a given statistic.
+       - t_stat is a vectorized function that accepts an 'axis' parameter.
+       - ppc is an ndarrya of shape (..., len(Y)) representing the posterior samples."""
+    ppc_flat = ppc.reshape(-1, len(Y))
+    t_stat_ppc = t_stat(ppc_flat, axis=-1)
+    t_stat_observed = t_stat(Y)
+
+    return np.mean(t_stat_ppc <= t_stat_observed)
 
 
 def get_mode_func():
@@ -541,23 +623,31 @@ def summary(data, **kwargs):
                       **kwargs)
 
 
-def point_predict(X, idata, names, point_estimate='mean'):
+def point_estimate(idata, pe, names):
     posterior_trace = idata.posterior
-    if point_estimate == 'mean':
+    if pe == 'mean':
         theta_ds = posterior_trace[names].mean(
             dim=("chain", "draw")).data_vars.values()
-    elif point_estimate == 'mode':
+    elif pe == 'mode':
         theta_ds = compute_mode(posterior_trace[names]).data_vars.values()
-    elif point_estimate == 'median':
+    elif pe == 'median':
         theta_ds = posterior_trace[names].median(
             dim=("chain", "draw")).data_vars.values()
     else:
         raise ValueError(
-            "'point_estimate' must be one of {mean, median, mode}.")
+            "'pe' must be one of {mean, median, mode}.")
 
     theta = np.concatenate([param.values.ravel() for param in theta_ds])
 
-    Y_hat = generate_response(X, theta, noise=False)
+    return theta
+
+
+def point_predict(X, idata, names, pe='mean', kind='regression'):
+    theta = point_estimate(idata, pe, names)
+    if kind == 'regression':
+        Y_hat = generate_response(X, theta, noise=False)
+    else:
+        Y_hat = generate_response_logistic(X, theta, prob=False)
 
     return Y_hat
 
@@ -570,6 +660,17 @@ def regression_metrics(y, y_hat):
     metrics = {
         "mse": mse,
         "r2": r2
+    }
+
+    return metrics
+
+
+def classification_metrics(y, y_hat):
+    """Quantify the goodness-of-fit of a classification model."""
+    acc = np.mean(y == y_hat)
+
+    metrics = {
+        "acc": acc
     }
 
     return metrics

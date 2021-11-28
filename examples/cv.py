@@ -2,9 +2,11 @@
 
 import numpy as np
 import pandas as pd
+import warnings
 import sys
 import os
 import logging
+from itertools import product
 import time
 import scipy
 from multiprocessing import Pool
@@ -28,6 +30,7 @@ import emcee
 
 # Ignore warnings
 os.environ["PYTHONWARNINGS"] = 'ignore::UserWarning'
+np.seterr(over='ignore', divide='ignore')
 
 # Floating point precision for display
 np.set_printoptions(precision=3, suppress=True)
@@ -56,6 +59,18 @@ def neg_ll(theta_tr, X, Y, theta_space):
              - np.linalg.norm(Y - alpha0 - X_tau@beta)**2/(2*sigma2))
 
 
+def optimizer_global(rng, args):
+    theta_init, X, Y, theta_space, method, bounds = args
+    return scipy.optimize.basinhopping(
+        neg_ll,
+        x0=theta_init,
+        seed=rng,
+        minimizer_kwargs={"args": (X, Y, theta_space),
+                          "method": method,
+                          "bounds": bounds}
+    ).x
+
+
 def compute_mle(
         theta_space, X, Y,
         method='Powell',
@@ -74,27 +89,36 @@ def compute_mle(
                   + [(None, None)]
                   + [(None, None)])
 
-    if strategy == 'local':
-        mle = scipy.optimize.minimize(
-            neg_ll,
-            x0=theta_init,
-            bounds=bounds,
-            method=method,
-            args=(X, Y, theta_space)
-        )
-    elif strategy == 'global':
-        mle = scipy.optimize.basinhopping(
-            neg_ll,
-            x0=theta_init,
-            seed=rng,
-            minimizer_kwargs={"args": (X, Y, theta_space),
-                              "method": method,
-                              "bounds": bounds}
-        )
-    else:
-        raise ValueError("Parameter 'strategy' must be one of {'local', 'global'}.")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
 
-    return mle.x
+        if strategy == 'local':
+            mle_theta = scipy.optimize.minimize(
+                neg_ll,
+                x0=theta_init,
+                bounds=bounds,
+                method=method,
+                args=(X, Y, theta_space)
+            ).x
+            bic = utils.compute_bic(theta_space, neg_ll, mle_theta, X, Y)
+        elif strategy == 'global':
+            mles = np.zeros((N_CORES, theta_space.ndim))
+
+            with Pool(N_CORES) as pool:
+                rngs = [np.random.default_rng(SEED + i)
+                        for i in range(N_CORES)]
+                args_optim = [theta_init, X, Y, theta_space, method, bounds]
+                mles = pool.starmap(
+                    optimizer_global, product(rngs, [args_optim]))
+                bics = utils.bic = utils.compute_bic(
+                    theta_space, neg_ll, mles, X, Y)
+                mle_theta = mles[np.argmin(bics)]
+                bic = bics[np.argmin(bics)]
+        else:
+            raise ValueError(
+                "Parameter 'strategy' must be one of {'local', 'global'}.")
+
+    return mle_theta, bic
 
 # -- Log-posterior model
 
@@ -129,7 +153,7 @@ def log_prior(theta_tr):
 
     # Compute log-prior
     log_prior = (0.5*utils.logdet(G_tau_reg)
-                 - (p + 2)*log_sigma
+                 - p*log_sigma
                  - b.T@G_tau_reg@b/(2*g*sigma2))
 
     return log_prior
@@ -198,6 +222,20 @@ class Basis(BaseEstimator, TransformerMixin):
     def transform(self, X, y=None):
         return X.to_basis(self.basis)
 
+class VariableSelection(BaseEstimator, TransformerMixin):
+
+    def __init__(self, grid=None, idx=None):
+        self.grid = grid
+        self.idx = idx
+        self.idx.sort()
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        return FDataGrid(X[:, self.idx], self.grid[self.idx])
+
+
 # -- Utility functions
 
 
@@ -224,7 +262,7 @@ def iteration_count(total, current):
 ###################################################################
 
 # Randomness and reproducibility
-SEED = 42
+SEED = int(sys.argv[1])
 np.random.seed(SEED)
 rng = np.random.default_rng(SEED)
 
@@ -234,14 +272,18 @@ N_CORES = 4
 # Data
 SYNTHETIC_DATA = False
 MODEL_GEN = "L2"
+STANDARDIZE_PREDICTORS = False
+STANDARDIZE_RESPONSE = False
+BASIS_REPRESENTATION = True
+TRANSFORM_TAU = False
 kernel_fn = utils.fractional_brownian_kernel
 beta_coef = utils.grollemund_smooth
-TRANSFORM_TAU = False
+basis = Fourier(n_basis=5)
 
 # Results
-FIT_SKLEARN = False
-PRINT_RESULTS_ONLINE = False
-PRINT_TO_FILE = True
+FIT_REF_ALGS = False
+PRINT_RESULTS_ONLINE = True
+PRINT_TO_FILE = False
 SAVE_RESULTS = False
 
 ###################################################################
@@ -304,12 +346,30 @@ else:
     grid = np.linspace(1./N, 1., N)  # TODO: use (normalized) real grid
     n_train, n_test = len(X_fd.data_matrix), len(X_test_fd.data_matrix)
 
+if BASIS_REPRESENTATION:
+    X_fd = X_fd.to_basis(basis).to_grid(grid)
+    X_test_fd = X_test_fd.to_basis(basis).to_grid(grid)
+
+if STANDARDIZE_PREDICTORS:
+    X_sd = X_fd.data_matrix.std(axis=0)
+else:
+    X_sd = np.ones(X_fd.data_matrix.shape[1:])
+
+if STANDARDIZE_RESPONSE:
+    Y_m = Y.mean()
+    Y_sd = Y.std()
+else:
+    Y_m = np.zeros(len(Y))
+    Y_sd = np.ones(len(Y))
+
 # Standardize data
 X_m = X_fd.mean(axis=0)
-X_fd = X_fd - X_m
+X_fd = (X_fd - X_m)/X_sd
 X = X_fd.data_matrix.reshape(-1, N)
-X_test_fd = X_test_fd - X_m
+X_test_fd = (X_test_fd - X_m)/X_sd
 X_test = X_test_fd.data_matrix.reshape(-1, N)
+Y = (Y - Y_m)/Y_sd
+Y_test = (Y_test - Y_m)/Y_sd
 
 # Names of parameters
 theta_names = ["β", "τ", "α0", "σ2"]
@@ -322,7 +382,7 @@ theta_names_aux = ["α0 and log σ"]
 # Names of results
 results_columns_emcee = \
     ["Estimator", "Features", "g", "η", "Mean_accpt (%)", "MSE", "RMSE", "R2"]
-results_columns_sk = ["Estimator", "Features", "MSE", "RMSE", "R2"]
+results_columns_ref = ["Estimator", "Features", "MSE", "RMSE", "R2"]
 
 # Transformations
 if TRANSFORM_TAU:
@@ -336,26 +396,26 @@ else:
 
 # -- Cv and Model parameters
 
-N_REPS = 10
+N_REPS = 1
 
 mle_method = 'L-BFGS-B'
 mle_strategy = 'global'
 
-ps = [6, 7, 8]
-gs = [5, 20]
-etas = [0.001, 0.01, 0.1, 1.0, 10.0]
+ps = [4]
+gs = [5]
+etas = [10.0]
 num_ps = len(ps)
 num_gs = len(gs)
 num_etas = len(etas)
 
 # -- Emcee sampler parameters
 
-n_walkers = 100
+n_walkers = 64
 n_iter_initial = 100
 n_iter = 1000
 return_pps = False
 thin = 1
-frac_random = 0.2
+frac_random = 0.3
 
 sd_beta_init = 10.0
 sd_tau_init = 0.2
@@ -364,10 +424,17 @@ sd_alpha0_init = 1.0
 param_sigma2_init = 2.0  # shape parameter in inv_gamma distribution
 sd_sigma2_init = 1.0
 
+moves = [
+    (emcee.moves.StretchMove(), 0.7),
+    (emcee.moves.WalkMove(), 0.3),
+]
+
 # -- Metrics parameters
 
+thin_ppc = 5
 point_estimates = ["mode", "mean", "median"]
-num_estimates = len(point_estimates)
+all_estimates = ["posterior_mean"] + point_estimates
+num_estimates = len(all_estimates)
 
 ###################################################################
 # RUN SAMPLER
@@ -380,8 +447,10 @@ mean_acceptance = np.zeros((N_REPS, num_ps, num_gs, num_etas))
 mse = np.zeros((N_REPS, num_ps, num_gs, num_etas, num_estimates))
 r2 = np.zeros((N_REPS, num_ps, num_gs, num_etas, num_estimates))
 exec_times = np.zeros((N_REPS, num_ps, num_gs, num_etas))
-bic = np.zeros((N_REPS, num_ps))
+bics = np.zeros((N_REPS, num_ps))
+mles = dict.fromkeys(ps)
 total_models = np.prod(exec_times.shape[1:])
+df_metrics_mle = pd.DataFrame(columns=results_columns_ref)
 
 logging.disable(sys.maxsize)  # Disable logger
 
@@ -394,20 +463,37 @@ try:
             theta_space = utils.ThetaSpace(
                 p, grid, theta_names, theta_names_ttr, "", tau_ttr=tau_ttr)
 
-            #  -- Compute MLE and initial points
+            #  -- Compute MLE and b0
 
             print(f"[p={p}] Computing MLE")
 
-            mle_theta = compute_mle(
-                theta_space, X, Y,
-                method=mle_method,
-                strategy=mle_strategy,
-                rng=rng)
+            if mles[p] is None:
+                mle_theta, bic_theta = compute_mle(
+                    theta_space, X, Y,
+                    method=mle_method,
+                    strategy=mle_strategy,
+                    rng=rng)
+
+                mles[p] = mle_theta
+                bics[rep, i] = bic_theta
+
+                # Simple model using only the MLE to predict
+
+                mle_theta_back = theta_space.backward(mle_theta)
+                Y_hat_mle = utils.generate_response(
+                    X_test, mle_theta_back, noise=False)
+                metrics_mle = utils.regression_metrics(Y_test, Y_hat_mle)
+                df_metrics_mle.loc[i] = [
+                    "mle",
+                    p,
+                    metrics_mle["mse"],
+                    np.sqrt(metrics_mle["mse"]),
+                    metrics_mle["r2"]
+                ]
+            else:
+                mle_theta = mles[p]
 
             b0 = mle_theta[theta_space.beta_idx]
-
-            bic[rep, i] = (theta_space.ndim*np.log(n_train)
-                           + 2*neg_ll(mle_theta, X, Y, theta_space))
 
             for j, g in enumerate(gs):
                 for k, eta in enumerate(etas):
@@ -428,7 +514,9 @@ try:
 
                     with Pool(N_CORES) as pool:
                         sampler = emcee.EnsembleSampler(
-                            n_walkers, 2*p + 2, log_posterior, pool=pool, args=(Y,))
+                            n_walkers, theta_space.ndim, log_posterior,
+                            pool=pool, args=(Y,),
+                            moves=moves)
                         state = sampler.run_mcmc(
                             p0, n_iter_initial, progress=False, store=False)
                         sampler.reset()
@@ -454,18 +542,29 @@ try:
                     mean_acceptance[rep, i, j, k] = 100 * \
                         np.mean(sampler.acceptance_fraction)
 
+                    # Posterior mean estimate
+                    ppc_test = utils.generate_ppc(
+                        idata, X_test, theta_names, thin_ppc, rng=rng)
+                    Y_hat = ppc_test.mean(axis=(0, 1))
+                    metrics = utils.regression_metrics(Y_test, Y_hat)
+                    mse[rep, i, j, k, 0] = metrics["mse"]
+                    r2[rep, i, j, k, 0] = metrics["r2"]
+
+                    # Point estimates
                     for m, pe in enumerate(point_estimates):
                         Y_hat = utils.point_predict(
                             X_test, idata,
                             theta_names, pe)
                         metrics = utils.regression_metrics(Y_test, Y_hat)
-                        mse[rep, i, j, k, m] = metrics["mse"]
-                        r2[rep, i, j, k, m] = metrics["r2"]
+                        mse[rep, i, j, k, m + 1] = metrics["mse"]
+                        r2[rep, i, j, k, m + 1] = metrics["r2"]
 
                     if PRINT_RESULTS_ONLINE:
+                        min_pe = np.argmin(mse[rep, i, j, k, :])
+                        min_mse = mse[rep, i, j, k, min_pe]
                         print(f"  p={p}, g={g}, η={eta}")
                         print(
-                            f"  --> Smallest MSE: {np.min(mse[rep, i, j, k, :]):.3f}")
+                            f"  --> Smallest MSE: {min_mse:.3f} with '{all_estimates[min_pe]}'")
 
 except KeyboardInterrupt:
     print("\n[INFO] Process halted by user. Skipping...")
@@ -482,7 +581,7 @@ df_metrics_emcee = pd.DataFrame(columns=results_columns_emcee)
 for i, p in enumerate(ps):
     for j, g in enumerate(gs):
         for k, eta in enumerate(etas):
-            for m, pe in enumerate(point_estimates):
+            for m, pe in enumerate(all_estimates):
                 it = iteration_count(
                     [num_ps, num_gs, num_etas, num_estimates], [i, j, k, m])
 
@@ -495,13 +594,14 @@ for i, p in enumerate(ps):
                     f"{r2[:, i, j, k, m].mean():.3f}±{r2[:, i, j, k, m].std():.3f}"
                 ]
 
+df_metrics_mle.sort_values(results_columns_ref[-2], inplace=True)
 df_metrics_emcee.sort_values(results_columns_emcee[-2], inplace=True)
 
 ###################################################################
 # FIT SKLEARN MODELS
 ###################################################################
 
-if FIT_SKLEARN:
+if FIT_REF_ALGS:
 
     # -- Select family of regressors
 
@@ -540,7 +640,7 @@ if FIT_SKLEARN:
                        params_reg
                        ))
 
-    # Ridge+manual
+    # Manual+Ridge
     regressors.append(("manual_sel+sk_ridge",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
@@ -573,7 +673,7 @@ if FIT_SKLEARN:
                        {**params_fpca, **params_svm}
                        ))
 
-    # SVM RBF+manual
+    # Manual+SVM RBF
     regressors.append(("manual_sel+sk_svm_rbf",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
@@ -599,7 +699,7 @@ if FIT_SKLEARN:
 
     # -- Fit model and save metrics
 
-    df_metrics_sk = pd.DataFrame(columns=results_columns_sk)
+    df_metrics_sk = pd.DataFrame(columns=results_columns_ref)
 
     print("\nFitting sklearn models...")
 
@@ -630,7 +730,7 @@ if FIT_SKLEARN:
             np.sqrt(metrics["mse"]),
             metrics["r2"]]
 
-    df_metrics_sk.sort_values(results_columns_sk[-2], inplace=True)
+    df_metrics_sk.sort_values(results_columns_ref[-2], inplace=True)
 
 ###################################################################
 # PRINT RESULTS
@@ -647,7 +747,7 @@ filename = ("emcee_" + data_name + "_transform_tau_" + str(TRANSFORM_TAU)
             + "_mle_" + mle_strategy + "_" + mle_method + "_frac_random_"
             + str(int(100*frac_random)) + "_walkers_" + str(n_walkers)
             + "_iters_" + str(n_iter) + "_thin_" + str(thin) + "_reps_"
-            + str(N_REPS) + "_seed_" + str(SEED))
+            + str(rep + 1) + "_seed_" + str(SEED))
 
 if PRINT_TO_FILE:
     print(f"\nSaving results to file '{filename}'")
@@ -671,10 +771,11 @@ else:
     print(f"Data name: {real_data_name}")
 print(f"Transform tau: {'true' if TRANSFORM_TAU else 'false'}")
 
-print("\n-- BIC --")
-bic_mean = bic.mean(axis=0)
+print("\n-- MLE PERFORMANCE --")
+bics_mean = bics.mean(axis=0)
 for i, p in enumerate(ps):
-    print(f"BIC [p={p}]: {bic_mean[i]:.3f}")
+    print(f"BIC [p={p}]: {bics_mean[i]:.3f}")
+print("\n", df_metrics_mle.to_string(index=False, col_space=6))
 
 print("\n-- EMCEE SAMPLER --")
 print(f"N_walkers: {n_walkers}")
@@ -691,7 +792,7 @@ print(
 print(f"Total execution time: {exec_times.sum()/60.:.3f} min\n")
 print(df_metrics_emcee.to_string(index=False, col_space=6))
 
-if FIT_SKLEARN:
+if FIT_REF_ALGS:
     print("\n-- RESULTS SKLEARN --\n")
     print(df_metrics_sk.to_string(index=False, col_space=6))
 
