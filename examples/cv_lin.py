@@ -16,6 +16,7 @@ from skfda.preprocessing.dim_reduction.feature_extraction import FPCA
 from skfda.ml.regression import LinearRegression as FLinearRegression
 from skfda.ml.regression import KNeighborsRegressor
 from skfda.representation.basis import FDataBasis, Fourier
+from skfda.representation.grid import FDataGrid
 
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.linear_model import Ridge, Lasso, LinearRegression
@@ -44,7 +45,7 @@ def neg_ll(theta_tr, X, Y, theta_space):
     """Transformed parameter vector 'theta_tr' is (β, logit τ, α0, log σ)."""
 
     n, N = X.shape
-    grid = np.linspace(1./N, 1., N)
+    grid = theta_space.grid
 
     assert len(theta_tr) == theta_space.ndim
 
@@ -79,7 +80,7 @@ def compute_mle(
     p = theta_space.p
 
     theta_init = theta_space.forward(
-        np.array([0.0]*p + [0.5]*p + [mean_alpha0_init] + [1.0]))
+        np.array([0.0]*p + [0.5]*p + [Y.mean()] + [1.0]))
 
     if TRANSFORM_TAU:
         bounds = None
@@ -170,7 +171,7 @@ def log_posterior(theta_tr, Y):
 
     if not np.isfinite(lp):
         if return_pp:
-            return -np.inf, np.full_like(Y, -np.inf)
+            return -np.inf, np.full_like(Y, -1.0)
         else:
             return -np.inf
 
@@ -184,7 +185,44 @@ def log_posterior(theta_tr, Y):
     else:
         return lpos
 
-# -- Sklearn transformers
+# -- Sklearn CV and transformers
+
+
+def cv_sk(regressors, folds, X, Y, X_test, Y_test, columns_name, verbose=False):
+
+    df_metrics_sk = pd.DataFrame(columns=columns_name)
+
+    for i, (name, pipe, params) in enumerate(regressors):
+        if verbose:
+            print(f"  Fitting {name}...")
+        reg_cv = GridSearchCV(pipe, params, scoring="neg_mean_squared_error",
+                              n_jobs=N_CORES, cv=folds)
+        reg_cv.fit(X, Y)
+        Y_hat_sk = reg_cv.predict(X_test)
+        metrics_sk = utils.regression_metrics(Y_test, Y_hat_sk)
+
+        if name == "sk_fknn":
+            n_features = f"K={reg_cv.best_params_['reg__n_neighbors']}"
+        elif "svm" in name:
+            n_features = reg_cv.best_estimator_["reg"].n_features_in_
+        else:
+            if isinstance(reg_cv.best_estimator_["reg"].coef_[0], FDataBasis):
+                coef = reg_cv.best_estimator_["reg"].coef_[0].coefficients[0]
+            else:
+                coef = reg_cv.best_estimator_["reg"].coef_
+
+            n_features = sum(~np.isclose(coef, 0))
+
+        df_metrics_sk.loc[i] = [
+            name,
+            n_features,
+            metrics_sk["mse"],
+            np.sqrt(metrics_sk["mse"]),
+            metrics_sk["r2"]]
+
+    df_metrics_sk.sort_values(columns_name[-2], inplace=True)
+
+    return df_metrics_sk
 
 
 class FeatureSelector(BaseEstimator, TransformerMixin):
@@ -222,6 +260,7 @@ class Basis(BaseEstimator, TransformerMixin):
     def transform(self, X, y=None):
         return X.to_basis(self.basis)
 
+
 class VariableSelection(BaseEstimator, TransformerMixin):
 
     def __init__(self, grid=None, idx=None):
@@ -233,7 +272,57 @@ class VariableSelection(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X, y=None):
-        return FDataGrid(X[:, self.idx], self.grid[self.idx])
+        return FDataGrid(X.data_matrix[:, self.idx], self.grid[self.idx])
+
+
+# -- Bayesian variable selection
+
+def bayesian_var_sel(idata, theta_space, names,
+                     X, Y, X_test, Y_test, folds,
+                     columns_name, prefix="emcee",
+                     point_est='mode', verbose=False):
+    grid = theta_space.grid
+    p_hat = theta_space.p
+    tau_hat = utils.point_estimate(idata, point_est, names)[p_hat:2*p_hat]
+    idx_hat = np.abs(grid - tau_hat[:, np.newaxis]).argmin(1)
+
+    regressors_var_sel = []
+    alphas = np.logspace(-4, 4, 20)
+    params_reg = {"reg__alpha": alphas}
+    params_svm = {"reg__C": alphas,
+                  "reg__gamma": ['auto', 'scale']}
+
+    # Emcee+Lasso
+    regressors_var_sel.append((f"{prefix}_{point_est}+sk_lasso",
+                               Pipeline([
+                                   ("var_sel", VariableSelection(grid, idx_hat)),
+                                   ("data_matrix", DataMatrix()),
+                                   ("reg", Lasso())]),
+                               params_reg
+                               ))
+
+    # Emcee+Ridge
+    regressors_var_sel.append((f"{prefix}_{point_est}+sk_ridge",
+                               Pipeline([
+                                   ("var_sel", VariableSelection(grid, idx_hat)),
+                                   ("data_matrix", DataMatrix()),
+                                   ("reg", Ridge())]),
+                               params_reg
+                               ))
+
+    # Emcee+SVM RBF
+    regressors_var_sel.append((f"{prefix}_{point_est}+sk_svm_rbf",
+                               Pipeline([
+                                   ("var_sel", VariableSelection(grid, idx_hat)),
+                                   ("data_matrix", DataMatrix()),
+                                   ("reg", SVR(kernel='rbf'))]),
+                               params_svm
+                               ))
+
+    df_metrics_var_sel = cv_sk(regressors_var_sel, folds, X, Y,
+                               X_test, Y_test, columns_name, verbose)
+
+    return df_metrics_var_sel
 
 
 # -- Utility functions
@@ -271,18 +360,22 @@ N_CORES = 4
 
 # Data
 SYNTHETIC_DATA = False
+REAL_DATA = "Tecator"
 MODEL_GEN = "L2"
 STANDARDIZE_PREDICTORS = False
 STANDARDIZE_RESPONSE = False
 BASIS_REPRESENTATION = True
-REAL_DATA = "Tecator"
+N_BASIS = 5
 TRANSFORM_TAU = False
+
 kernel_fn = utils.fractional_brownian_kernel
 beta_coef = utils.grollemund_smooth
-basis = Fourier(n_basis=5)
+basis = Fourier(n_basis=N_BASIS)
+folds = KFold(shuffle=True, random_state=SEED)
 
 # Results
-FIT_REF_ALGS = False
+FIT_REF_ALGS = True
+REFIT_BEST_VAR_SEL = True
 PRINT_RESULTS_ONLINE = False
 PRINT_TO_FILE = False
 SAVE_RESULTS = False
@@ -307,14 +400,12 @@ if SYNTHETIC_DATA:
             n_train + n_test, beta_coef, alpha0_true,
             sigma2_true, rng=rng
         )
-
     elif MODEL_GEN == "RKHS":
         x, y = utils.generate_gp_rkhs_dataset(
             grid, kernel_fn,
             n_train + n_test, beta_true, tau_true,
             alpha0_true, sigma2_true, rng=rng
         )
-
     else:
         raise ValueError(
             f"Model generation must be 'L2' or 'RKHS', but got {MODEL_GEN}")
@@ -330,11 +421,11 @@ if SYNTHETIC_DATA:
 else:
     if REAL_DATA == "Tecator":
         x, y = skfda.datasets.fetch_tecator(return_X_y=True)
-        y = np.log(y[:, 1])  # Log-Fat
+        y = np.sqrt(y[:, 1])  # Log-Fat
     elif REAL_DATA == "Weather":
         data = skfda.datasets.fetch_weather()
         x, y_func = data['data'].coordinates
-        y = np.log(y_func.data_matrix.sum(axis=1)[:, 0]) # Log-precipitation
+        y = np.log(y_func.data_matrix.sum(axis=1)[:, 0])  # Log-precipitation
     else:
         raise ValueError("REAL_DATA must be 'Tecator' or 'Weather'.")
 
@@ -395,14 +486,14 @@ else:
 
 # -- Cv and Model parameters
 
-N_REPS = 1
+N_REPS = 5
 
 mle_method = 'L-BFGS-B'
 mle_strategy = 'global'
 
-ps = [4]
+ps = [3]
 gs = [5]
-etas = [10.0]
+etas = [0.01]
 num_ps = len(ps)
 num_gs = len(gs)
 num_etas = len(etas)
@@ -411,12 +502,12 @@ num_etas = len(etas)
 
 n_walkers = 64
 n_iter_initial = 100
-n_iter = 1500
+n_iter = 1000
 return_pp = False
 thin = 1
 frac_random = 0.3
 
-sd_beta_init = 5.0
+sd_beta_init = 1.0
 sd_tau_init = 0.2
 mean_alpha0_init = Y.mean()
 sd_alpha0_init = 1.0
@@ -456,6 +547,7 @@ logging.disable(sys.maxsize)  # Disable logger
 try:
     for rep in range(N_REPS):
         print(f"\n(It. {rep + 1}/{N_REPS}) Running {total_models} models...")
+
         for i, p in enumerate(ps):
             # -- Parameter space
 
@@ -464,9 +556,9 @@ try:
 
             #  -- Compute MLE and b0
 
-            print(f"[p={p}] Computing MLE...", end="")
-
             if mles[p] is None:
+                print(f"  [p={p}] Computing MLE...", end="")
+
                 mle_theta, bic_theta = compute_mle(
                     theta_space, X, Y,
                     method=mle_method,
@@ -489,10 +581,11 @@ try:
                     np.sqrt(metrics_mle["mse"]),
                     metrics_mle["r2"]
                 ]
+
+                print("done")
+
             else:
                 mle_theta = mles[p]
-
-            print("done")
 
             b0 = mle_theta[theta_space.beta_idx]
 
@@ -534,7 +627,7 @@ try:
                         burn = 500
 
                     idata = utils.emcee_to_idata(
-                        sampler, theta_space, burn, thin, return_pp)
+                        sampler, theta_space, burn, thin, ["y_star"] if return_pp else [])
 
                     exec_times[rep, i, j, k] = time.time() - start
 
@@ -563,21 +656,24 @@ try:
                     if PRINT_RESULTS_ONLINE:
                         min_pe = np.argmin(mse[rep, i, j, k, :])
                         min_mse = mse[rep, i, j, k, min_pe]
-                        print(f"  p={p}, g={g}, η={eta}")
                         print(
-                            f"  --> Smallest MSE: {min_mse:.3f} with '{all_estimates[min_pe]}'")
+                            f"  [p={p}, g={g}, η={eta}]: Min MSE = {min_mse:.3f} "
+                            f"with '{all_estimates[min_pe]}'")
+
+        if not PRINT_RESULTS_ONLINE:
+            print("")
 
 except KeyboardInterrupt:
     print("\n[INFO] Process halted by user. Skipping...")
     rep = rep - 1
-
-logging.disable(logging.NOTSET)  # Re-enable logger
 
 ###################################################################
 # COMPUTE AVERAGE RESULTS
 ###################################################################
 
 df_metrics_emcee = pd.DataFrame(columns=results_columns_emcee)
+min_mse = np.inf
+min_mse_params = (-1, -1, -1)  # (i, j, k)
 
 for i, p in enumerate(ps):
     for j, g in enumerate(gs):
@@ -586,17 +682,87 @@ for i, p in enumerate(ps):
                 it = iteration_count(
                     [num_ps, num_gs, num_etas, num_estimates], [i, j, k, m])
 
+                mean_mse = mse[:rep + 1, i, j, k, m].mean()
+                if mean_mse < min_mse:
+                    min_mse = mean_mse
+                    min_mse_params = (i, j, k)
+
                 df_metrics_emcee.loc[it] = [
                     "emcee_" + pe,
                     p, g, eta,
-                    f"{mean_acceptance[:, i, j, k].mean():.3f}±{mean_acceptance[:, i, j, k].std():.3f}",
-                    f"{mse[:, i, j, k, m].mean():.3f}±{mse[:, i, j, k, m].std():.3f}",
-                    f"{np.sqrt(mse[:, i, j, k, m]).mean():.3f}±{np.sqrt(mse[:, i, j, k, m]).std():.3f}",
-                    f"{r2[:, i, j, k, m].mean():.3f}±{r2[:, i, j, k, m].std():.3f}"
+                    f"{mean_acceptance[:rep + 1, i, j, k].mean():.3f}"
+                    f"±{mean_acceptance[:rep + 1, i, j, k].std():.3f}",
+                    f"{mse[:rep + 1, i, j, k, m].mean():.3f}"
+                    f"±{mse[:rep + 1, i, j, k, m].std():.3f}",
+                    f"{np.sqrt(mse[:rep + 1, i, j, k, m]).mean():.3f}"
+                    f"±{np.sqrt(mse[:rep + 1, i, j, k, m]).std():.3f}",
+                    f"{r2[:rep + 1, i, j, k, m].mean():.3f}"
+                    f"±{r2[:rep + 1, i, j, k, m].std():.3f}"
                 ]
 
 df_metrics_mle.sort_values(results_columns_ref[-2], inplace=True)
 df_metrics_emcee.sort_values(results_columns_emcee[-2], inplace=True)
+
+###################################################################
+# BAYESIAN VARIABLE SELECTION ON BEST MODEL
+###################################################################
+
+df_metrics_var_sel = pd.DataFrame(columns=results_columns_ref)
+
+if REFIT_BEST_VAR_SEL and rep + 1 > 0:
+    i, j, k = min_mse_params
+    p, g, eta = ps[i], gs[j], etas[k]
+    mle_theta = mles[p]
+    theta_space = utils.ThetaSpace(
+        p, grid, theta_names, theta_names_ttr, "", tau_ttr=tau_ttr)
+    b0 = mle_theta[theta_space.beta_idx]
+
+    # -- Run sampler
+
+    print(f"\nRefitting best model (p={p}, g={g}, η={eta})...")
+
+    p0 = utils.weighted_initial_guess_around_value(
+        theta_space, mle_theta, sd_beta_init, sd_tau_init,
+        mean_alpha0_init, sd_alpha0_init, param_sigma2_init,
+        sd_sigma2_init, n_walkers=n_walkers, rng=rng,
+        frac_random=frac_random)
+
+    with Pool(N_CORES) as pool:
+        sampler = emcee.EnsembleSampler(
+            n_walkers, theta_space.ndim, log_posterior,
+            pool=pool, args=(Y,),
+            moves=moves)
+        state = sampler.run_mcmc(
+            p0, n_iter_initial, progress=False, store=False)
+        sampler.reset()
+        sampler.run_mcmc(state, n_iter, progress=False)
+
+    # -- Get InferenceData object
+
+    autocorr = sampler.get_autocorr_time(quiet=True)
+    max_autocorr = np.max(autocorr)
+    if np.isfinite(max_autocorr):
+        burn = int(3*max_autocorr)
+    else:
+        burn = 500
+
+    logging.disable(logging.NOTSET)  # Re-enable logger
+
+    idata = utils.emcee_to_idata(
+        sampler, theta_space, burn, thin, ["y_star"] if return_pp else [])
+
+    # -- Bayesian variable selection
+
+    print("Fitting sklearn models with Bayesian variable selection...")
+
+    for pe in point_estimates:
+        df_metrics_var_sel = df_metrics_var_sel.append(
+            bayesian_var_sel(
+                idata, theta_space, theta_names, X_fd,
+                Y, X_test_fd, Y_test, folds, results_columns_ref,
+                prefix="emcee", point_est=pe))
+
+    df_metrics_var_sel.sort_values(results_columns_ref[-2], inplace=True)
 
 ###################################################################
 # FIT SKLEARN MODELS
@@ -607,10 +773,9 @@ if FIT_REF_ALGS:
     # -- Select family of regressors
 
     regressors = []
-    folds = KFold(shuffle=True, random_state=SEED)
 
     alphas = np.logspace(-4, 4, 20)
-    n_selected = [5, 10, 15, 20, 25]
+    n_selected = [5, 10, 15, 20, 25, X.shape[1]]
     n_components = [2, 3, 4, 5, 6, 10]
     n_basis = [3, 5, 7, 9, 11]
     basis_fourier = [Fourier(n_basis=p) for p in n_basis]
@@ -630,14 +795,6 @@ if FIT_REF_ALGS:
                        Pipeline([
                            ("data_matrix", DataMatrix()),
                            ("reg", Lasso())]),
-                       params_reg
-                       ))
-
-    # Ridge
-    regressors.append(("sk_ridge",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("reg", Ridge())]),
                        params_reg
                        ))
 
@@ -700,38 +857,9 @@ if FIT_REF_ALGS:
 
     # -- Fit model and save metrics
 
-    df_metrics_sk = pd.DataFrame(columns=results_columns_ref)
-
-    print("\nFitting sklearn models...")
-
-    for i, (name, pipe, params) in enumerate(regressors):
-        print(f"  {name}")
-        reg_cv = GridSearchCV(pipe, params, scoring="neg_mean_squared_error",
-                              n_jobs=N_CORES, cv=folds)
-        reg_cv.fit(X_fd, Y)
-        Y_hat_sk = reg_cv.predict(X_test_fd)
-        metrics_sk = utils.regression_metrics(Y_test, Y_hat_sk)
-
-        if name == "sk_fknn":
-            n_features = f"K={reg_cv.best_params_['reg__n_neighbors']}"
-        elif "svm" in name:
-            n_features = reg_cv.best_estimator_["reg"].n_features_in_
-        else:
-            if isinstance(reg_cv.best_estimator_["reg"].coef_[0], FDataBasis):
-                coef = reg_cv.best_estimator_["reg"].coef_[0].coefficients[0]
-            else:
-                coef = reg_cv.best_estimator_["reg"].coef_
-
-            n_features = sum(~np.isclose(coef, 0))
-
-        df_metrics_sk.loc[i] = [
-            name,
-            n_features,
-            metrics_sk["mse"],
-            np.sqrt(metrics_sk["mse"]),
-            metrics_sk["r2"]]
-
-    df_metrics_sk.sort_values(results_columns_ref[-2], inplace=True)
+    print("Fitting reference sklearn models...")
+    df_metrics_sk = cv_sk(regressors, folds, X_fd, Y, X_test_fd,
+                          Y_test, results_columns_ref, verbose=True)
 
 ###################################################################
 # PRINT RESULTS
@@ -744,10 +872,10 @@ if SYNTHETIC_DATA:
 else:
     data_name = REAL_DATA
 
-filename = ("emcee_" + data_name + "_transform_tau_" + str(TRANSFORM_TAU)
-            + "_mle_" + mle_strategy + "_" + mle_method + "_frac_random_"
-            + str(int(100*frac_random)) + "_walkers_" + str(n_walkers)
-            + "_iters_" + str(n_iter) + "_thin_" + str(thin) + "_reps_"
+filename = ("emcee_" + data_name + "_basis_"
+            + (basis.__class__.__name__ if BASIS_REPRESENTATION else "None")
+            + "_frac_random_" + str(int(100*frac_random)) + "_walkers_"
+            + str(n_walkers) + "_iters_" + str(n_iter) + "_reps_"
             + str(rep + 1) + "_seed_" + str(SEED))
 
 if PRINT_TO_FILE:
@@ -759,6 +887,14 @@ else:
 
 print("-- MODEL GENERATION --")
 print(f"Train,test size: {n_train},{n_test}")
+if STANDARDIZE_PREDICTORS:
+    print("Standardized predictors")
+if STANDARDIZE_RESPONSE:
+    print("Standardized response")
+if BASIS_REPRESENTATION:
+    print(f"Basis: {basis.__class__.__name__}(n={N_BASIS})")
+else:
+    print("Basis: None")
 if SYNTHETIC_DATA:
     print(f"GP kernel: {kernel_fn.__name__}")
     print(f"Model type: {MODEL_GEN}")
@@ -773,10 +909,11 @@ else:
 print(f"Transform tau: {'true' if TRANSFORM_TAU else 'false'}")
 
 print("\n-- MLE PERFORMANCE --")
-bics_mean = bics.mean(axis=0)
+bics_mean = bics[:rep + 1, ...].mean(axis=0)
 for i, p in enumerate(ps):
     print(f"BIC [p={p}]: {bics_mean[i]:.3f}")
-print("\n", df_metrics_mle.to_string(index=False, col_space=6))
+print("")
+print(df_metrics_mle.to_string(index=False, col_space=6))
 
 print("\n-- EMCEE SAMPLER --")
 print(f"N_walkers: {n_walkers}")
@@ -784,15 +921,22 @@ print(f"N_iters: {n_iter}")
 print(f"MLE: {mle_method} + {mle_strategy}")
 print(f"Frac_random: {frac_random}")
 print(f"Burn-in: {n_iter_initial}")
-print(f"Thinning: {thin}")
+print(f"Thinning chain,pp: {thin},{thin_pp}")
+print("Moves:")
+for move, prob in moves:
+    print(f"  {move.__class__.__name__}, {prob}")
 
 print("\n-- RESULTS EMCEE --")
 print(f"Random iterations: {rep + 1}")
 print(
-    f"Mean execution time: {exec_times.mean():.3f}±{exec_times.std():.3f} s")
+    f"Mean execution time: {exec_times[:rep + 1, ...].mean():.3f}"
+    f"±{exec_times[:rep + 1, ...].std():.3f} s")
 print(f"Total execution time: {exec_times.sum()/60.:.3f} min\n")
 print(df_metrics_emcee.to_string(index=False, col_space=6))
 
+if REFIT_BEST_VAR_SEL:
+    print("\n-- RESULTS BAYESIAN VARIABLE SELECTION --\n")
+    print(df_metrics_var_sel.to_string(index=False, col_space=6))
 if FIT_REF_ALGS:
     print("\n-- RESULTS SKLEARN --\n")
     print(df_metrics_sk.to_string(index=False, col_space=6))
@@ -805,8 +949,7 @@ if FIT_REF_ALGS:
 if SAVE_RESULTS:
     np.savez(
         filename + ".npz",
-        exec_times=exec_times,
-        mean_acceptance=mean_acceptance,
-        mse=mse,
-        r2=r2
+        mean_acceptance=mean_acceptance[:rep + 1, ...],
+        mse=mse[:rep + 1, ...],
+        r2=r2[:rep + 1, ...]
     )
