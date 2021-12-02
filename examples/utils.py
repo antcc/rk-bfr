@@ -3,7 +3,8 @@
 import numpy as np
 from matplotlib import pyplot as plt
 import arviz as az
-from tqdm.notebook import tqdm
+from tqdm.notebook import tqdm as tqdm_notebook
+from tqdm import tqdm
 from sklearn.metrics import r2_score
 from arviz.stats.stats_utils import make_ufunc
 from arviz.plots.plot_utils import calculate_point_estimate
@@ -195,12 +196,19 @@ def generate_response(X, theta, noise=True, rng=None):
     return Y
 
 
-def threshold(y):
-    return 1 if y >= 0 else 0
+def threshold_lin(x):
+    """sigmoid(x) >= 0.5 iff x >= 0"""
+    return 1 if x >= 0 else 0
 
 
-def generate_response_logistic(X, theta, prob=True, rng=None):
-    """Generate a response when the parameter vector 'theta' is (β, τ, α0, σ2)."""
+def threshold(x):
+    """y_hat == 1 iff sigmoid(x) >= 0.5"""
+    return 1 if x >= 0.5 else 0
+
+
+def generate_response_logistic(X, theta, prob=True, return_p=False, rng=None):
+    """Generate a response when the parameter vector 'theta' is (β, τ, α0, σ2).
+       Return the response vector and (possibly) the probabilities associated."""
     assert len(theta) % 2 == 0
 
     Y_lin = generate_response(X, theta, noise=False)
@@ -208,9 +216,12 @@ def generate_response_logistic(X, theta, prob=True, rng=None):
     if prob:
         Y = transform_linear_response(Y_lin, rng=rng)
     else:
-        Y = [threshold(y) for y in Y_lin]
+        Y = [threshold_lin(y) for y in Y_lin]
 
-    return Y
+    if return_p:
+        return Y, expit(Y_lin)
+    else:
+        return Y
 
 
 def gp(grid, kernel_fn, n_samples, rng=None):
@@ -262,23 +273,51 @@ def generate_gp_rkhs_dataset(
     return X, Y
 
 
-def transform_linear_response(Y_lin, rng):
+def generate_classification_dataset(
+        grid, kernel_fn, kernel_fn2,
+        n_samples, rng=None
+):
+
+    X1 = gp(grid, kernel_fn, n_samples//2, rng)
+    X2 = gp(grid, kernel_fn2, n_samples - n_samples//2, rng)
+
+    X = np.vstack((X1, X2))
+    Y = (n_samples//2 <= np.arange(n_samples)).astype(int)
+
+    return X, Y
+
+
+def transform_linear_response(Y_lin, noise=None, rng=None):
+    """Convert probabilities into class labels with a possible random
+       noise."""
     if rng is None:
         rng = np.random.default_rng()
 
     Y = rng.binomial(1, expit(Y_lin))
 
+    if noise is not None:
+        n_permute = int(len(Y)*noise)
+
+        idx_0 = rng.choice(np.where(Y == 0)[0], size=n_permute)
+        idx_1 = rng.choice(np.where(Y == 1)[0], size=n_permute)
+
+        Y[idx_0] = 1
+        Y[idx_1] = 0
+
     return Y
 
 
-def plot_dataset(X, Y, plot_means=True, figsize=(9, 4)):
+def plot_dataset(X, Y, plot_means=True, n_samples=None, figsize=(9, 4)):
     fig, axs = plt.subplots(1, 2, figsize=figsize)
     n, N = X.shape
     grid = np.linspace(1./N, 1., N)
 
-    axs[0].set_title(r"(Some) functional regressors $X_i(t)$")
+    if n_samples is None:
+        n_samples = n
+
+    axs[0].set_title(r"Functional regressors $X_i(t)$")
     axs[0].set_xlabel(r"$t$")
-    axs[0].plot(grid, X.T[:, :n//2], alpha=0.8)
+    axs[0].plot(grid, X.T[:, :n_samples], alpha=0.8)
 
     axs[1].set_yticks([])
     axs[1].set_title(r"Scalar values $Y_i$")
@@ -296,29 +335,43 @@ def plot_dataset(X, Y, plot_means=True, figsize=(9, 4)):
         axs[1].legend()
 
 
-def plot_dataset_classification(X, Y, plot_means=True, figsize=(5, 4)):
-    fig = plt.figure(figsize=figsize)
+def plot_dataset_classification(X, Y, plot_means=True, figsize=(5, 4), ax=None):
+    fig, axs = plt.subplots(1, 2, figsize=figsize)
+
     n, N = X.shape
     grid = np.linspace(1./N, 1., N)
     label0 = Y == 0
     label1 = Y == 1
 
-    plt.title(r"(Some) functional regressors $X_i(t)$ labeled according to $Y_i$")
-    plt.xlabel(r"$t$")
+    axs[0].set_title(r"Labeled functional regressors $X_i(t)$")
+    axs[0].set_xlabel(r"$t$")
     if sum(label0) > 0:
-        plt.plot(grid, X.T[:, (Y == 0)], alpha=0.5, color="blue",
-                 label=["Class 0"] + [""]*(sum(Y == 0) - 1))
+        axs[0].plot(grid, X.T[:, Y == 0], alpha=0.5, color="blue",
+                    label=["Class 0"] + [""]*(sum(Y == 0) - 1))
     if sum(label1) > 0:
-        plt.plot(grid, X.T[:, Y == 1], alpha=0.5, color="red",
-                 label=["Class 1"] + [""]*(sum(Y == 1) - 1))
+        axs[0].plot(grid, X.T[:, Y == 1], alpha=0.5, color="red",
+                    label=["Class 1"] + [""]*(sum(Y == 1) - 1))
 
     if plot_means:
-        plt.plot(
+        axs[0].plot(
             grid, np.mean(X, axis=0),
             linewidth=3, color='k',
             label="Sample mean")
 
-    plt.legend(fontsize=8)
+    axs[0].legend(fontsize=8)
+
+    axs[1].set_title("Class distribution")
+    axs[1].set_xlabel("Class")
+    axs[1].set_xticks([0, 1])
+    unique, counts = np.unique(Y, return_counts=True)
+    counts = counts/np.sum(counts)  # Get frequency
+    if counts[0] > 0:
+        axs[1].bar(unique[0], counts[0], color="blue",
+                   label="Class 0", width=.3)
+    if counts[1] > 0:
+        axs[1].bar(unique[1], counts[1], color="red",
+                   label="Class 1", width=.3)
+    axs[1].legend()
 
 
 def compute_bic(theta_space, neg_ll, mles, X, Y):
@@ -479,33 +532,39 @@ def plot_evolution(trace, labels):
     axes[-1].set_xlabel("step")
 
 
-def emcee_to_idata(sampler, theta_space, burn, thin, ppc=False):
+def emcee_to_idata(sampler, theta_space, burn, thin, blob_names=[]):
     names = theta_space.names
     names_ttr = theta_space.names_ttr
     p = theta_space.p
+    n_blobs = len(blob_names)
 
-    if ppc:
+    if n_blobs > 0:
+        new_vars = {}
+        for name in blob_names:
+            new_vars[name] = ["prediction"]
+
         idata = az.from_emcee(
             sampler,
             var_names=names_ttr,
             slices=[slice(0, p), slice(p, 2*p), -2, -1],
             arg_names=["y_obs"],
-            blob_names=["y_rec"],
-            blob_groups=["posterior_predictive"],
-            dims={f"{names_ttr[0]}": ["projection"],
-                  f"{names_ttr[1]}": ["projection"],
-                  "y_obs": ["observed"],
-                  "y_rec": ["recovered"]}
+            blob_names=blob_names,
+            blob_groups=n_blobs*["posterior_predictive"],
+            dims={
+                **{f"{names_ttr[0]}": ["vector"],
+                   f"{names_ttr[1]}": ["vector"],
+                   "y_obs": ["observation"]}, **new_vars}
         )
+
     else:
         idata = az.from_emcee(
             sampler,
             var_names=names_ttr,
             slices=[slice(0, p), slice(p, 2*p), -2, -1],
             arg_names=["y_obs"],
-            dims={f"{names_ttr[0]}": ["projection"],
-                  f"{names_ttr[1]}": ["projection"],
-                  "y_obs": ["observed"]},
+            dims={f"{names_ttr[0]}": ["vector"],
+                  f"{names_ttr[1]}": ["vector"],
+                  "y_obs": ["observation"]},
         )
 
     # Burn-in and thinning
@@ -521,7 +580,9 @@ def emcee_to_idata(sampler, theta_space, burn, thin, ppc=False):
 
 # TODO: improve inner for loop and change generate_response so that it can handle
 # multiple thetas and return a matrix of (n_thetas, n) (or the transpose)
-def generate_ppc(idata, X, var_names, thin=1, rng=None, kind='regression'):
+def generate_pp(
+        idata, X, var_names, thin=1, rng=None,
+        kind='regression', progress='notebook'):
     if rng is None:
         rng = np.random.default_rng()
 
@@ -530,34 +591,53 @@ def generate_ppc(idata, X, var_names, thin=1, rng=None, kind='regression'):
     n_chain = len(posterior_trace["chain"])
     n_draw = len(posterior_trace["draw"])
     range_draws = range(0, n_draw, thin)
-    ppc = np.zeros((n_chain, len(range_draws), n))
+    pp_y = np.zeros((n_chain, len(range_draws), n))
 
-    for i in tqdm(range(n_chain), "Posterior predictive samples"):
+    if kind == 'classification':
+        pp_p = np.zeros((n_chain, len(range_draws), n))
+
+    if progress is True:
+        chain_range = tqdm(range(n_chain), "Posterior predictive samples")
+    elif progress == 'notebook':
+        chain_range = tqdm_notebook(
+            range(n_chain), "Posterior predictive samples")
+    else:
+        chain_range = range(n_chain)
+
+    for i in chain_range:
         for j, jj in enumerate(range_draws):
             theta_ds = posterior_trace[var_names].isel(
                 chain=i, draw=jj).data_vars.values()
             theta = np.concatenate([param.values.ravel()
                                     for param in theta_ds])
 
-            if kind == 'regression':
-                Y_hat = generate_response(X, theta, rng=rng)
+            if kind == 'classification':
+                Y_star, p_star = generate_response_logistic(
+                    X, theta, return_p=True, rng=rng)
+                pp_p[i, j, :] = p_star
             else:
-                Y_hat = generate_response_logistic(X, theta, rng=rng)
+                Y_star = generate_response(X, theta, rng=rng)
 
-            ppc[i, j, :] = Y_hat
+            pp_y[i, j, :] = Y_star
 
-    return ppc
+    if kind == 'classification':
+        return pp_p, pp_y.astype(int)
+    else:
+        return pp_y
 
 
-def ppc_to_idata(ppc, idata, y_name, y_obs=None):
-    n = ppc.shape[-1]
-    dim_name = "recovered" if y_name == "y_rec" else "predicted"
+def pp_to_idata(pps, idata, var_names, y_obs=None):
+    """All the pp arrays must have the same shape (the shape of y_obs)."""
+    dim_name = "prediction"
     coords = idata.posterior[["chain", "draw"]].coords
-    coords.update({dim_name: np.arange(0, n)})
+    coords.update({dim_name: np.arange(0, pps[0].shape[-1])})
+    data_vars = {}
 
-    idata_ppc = az.convert_to_inference_data(
-        xr.Dataset(data_vars={y_name: (("chain", "draw", dim_name), ppc)},
-                   coords=coords),
+    for pp, var_name in zip(pps, var_names):
+        data_vars[var_name] = (("chain", "draw", dim_name), pp)
+
+    idata_pp = az.convert_to_inference_data(
+        xr.Dataset(data_vars=data_vars, coords=coords),
         group="posterior_predictive",
     )
 
@@ -566,13 +646,13 @@ def ppc_to_idata(ppc, idata, y_name, y_obs=None):
             idata.observed_data, group="observed_data")
     else:
         idata_obs = az.convert_to_inference_data(
-            xr.Dataset(data_vars={"y_obs": ("observed", y_obs)},
+            xr.Dataset(data_vars={"y_obs": ("observation", y_obs)},
                        coords=coords),
             group="observed_data")
 
-    az.concat(idata_ppc, idata_obs, inplace=True)
+    az.concat(idata_pp, idata_obs, inplace=True)
 
-    return idata_ppc
+    return idata_pp
 
 
 def plot_ppc(idata, n_samples=None, ax=None, legend=False, **kwargs):
@@ -587,15 +667,15 @@ def plot_ppc(idata, n_samples=None, ax=None, legend=False, **kwargs):
         ax.legend()
 
 
-def bpv(ppc, Y, t_stat):
+def bpv(pp, Y, t_stat):
     """Compute bayesian p-values for a given statistic.
        - t_stat is a vectorized function that accepts an 'axis' parameter.
-       - ppc is an ndarrya of shape (..., len(Y)) representing the posterior samples."""
-    ppc_flat = ppc.reshape(-1, len(Y))
-    t_stat_ppc = t_stat(ppc_flat, axis=-1)
+       - pp is an ndarrya of shape (..., len(Y)) representing the posterior samples."""
+    pp_flat = pp.reshape(-1, len(Y))
+    t_stat_pp = t_stat(pp_flat, axis=-1)
     t_stat_observed = t_stat(Y)
 
-    return np.mean(t_stat_ppc <= t_stat_observed)
+    return np.mean(t_stat_pp <= t_stat_observed)
 
 
 def get_mode_func():
@@ -652,10 +732,10 @@ def point_predict(X, idata, names, pe='mean', kind='regression'):
     return Y_hat
 
 
-def regression_metrics(y, y_hat):
+def regression_metrics(Y, Y_hat):
     """Quantify the goodness-of-fit of a regression model."""
-    mse = np.mean((y - y_hat)**2)
-    r2 = r2_score(y, y_hat)
+    mse = np.mean((Y - Y_hat)**2)
+    r2 = r2_score(Y, Y_hat)
 
     metrics = {
         "mse": mse,
@@ -665,9 +745,9 @@ def regression_metrics(y, y_hat):
     return metrics
 
 
-def classification_metrics(y, y_hat):
+def classification_metrics(Y, Y_hat):
     """Quantify the goodness-of-fit of a classification model."""
-    acc = np.mean(y == y_hat)
+    acc = np.mean(Y == Y_hat)
 
     metrics = {
         "acc": acc

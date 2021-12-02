@@ -165,11 +165,11 @@ def log_likelihood(theta_tr, Y):
 
 
 def log_posterior(theta_tr, Y):
-    """Global parameters (for efficient parallelization): X, rng, return_pps"""
+    """Global parameters (for efficient parallelization): X, rng, return_pp"""
     lp = log_prior(theta_tr)
 
     if not np.isfinite(lp):
-        if return_pps:
+        if return_pp:
             return -np.inf, np.full_like(Y, -np.inf)
         else:
             return -np.inf
@@ -177,10 +177,10 @@ def log_posterior(theta_tr, Y):
     ll = log_likelihood(theta_tr, Y)
     lpos = lp + ll
 
-    if return_pps:
+    if return_pp:
         theta = theta_space.backward(theta_tr)
-        pps = utils.generate_response(X, theta, rng=rng)
-        return lpos, pps
+        pp = utils.generate_response(X, theta, rng=rng)
+        return lpos, pp
     else:
         return lpos
 
@@ -275,6 +275,7 @@ MODEL_GEN = "L2"
 STANDARDIZE_PREDICTORS = False
 STANDARDIZE_RESPONSE = False
 BASIS_REPRESENTATION = True
+REAL_DATA = "Tecator"
 TRANSFORM_TAU = False
 kernel_fn = utils.fractional_brownian_kernel
 beta_coef = utils.grollemund_smooth
@@ -282,7 +283,7 @@ basis = Fourier(n_basis=5)
 
 # Results
 FIT_REF_ALGS = False
-PRINT_RESULTS_ONLINE = True
+PRINT_RESULTS_ONLINE = False
 PRINT_TO_FILE = False
 SAVE_RESULTS = False
 
@@ -301,28 +302,16 @@ if SYNTHETIC_DATA:
     sigma2_true = 0.5
 
     if MODEL_GEN == "L2":
-        X, Y = utils.generate_gp_l2_dataset(
+        x, y = utils.generate_gp_l2_dataset(
             grid, kernel_fn,
-            n_train, beta_coef, alpha0_true,
-            sigma2_true, rng=rng
-        )
-
-        X_test, Y_test = utils.generate_gp_l2_dataset(
-            grid, kernel_fn,
-            n_test, beta_coef, alpha0_true,
+            n_train + n_test, beta_coef, alpha0_true,
             sigma2_true, rng=rng
         )
 
     elif MODEL_GEN == "RKHS":
-        X, Y = utils.generate_gp_rkhs_dataset(
+        x, y = utils.generate_gp_rkhs_dataset(
             grid, kernel_fn,
-            n_train, beta_true, tau_true,
-            alpha0_true, sigma2_true, rng=rng
-        )
-
-        X_test, Y_test = utils.generate_gp_rkhs_dataset(
-            grid, kernel_fn,
-            n_test, beta_true, tau_true,
+            n_train + n_test, beta_true, tau_true,
             alpha0_true, sigma2_true, rng=rng
         )
 
@@ -330,25 +319,35 @@ if SYNTHETIC_DATA:
         raise ValueError(
             f"Model generation must be 'L2' or 'RKHS', but got {MODEL_GEN}")
 
+    # Train/test split
+    X, X_test, Y, Y_test = train_test_split(
+        x, y, train_size=n_train, random_state=SEED)
+
     # Create FData object
     X_fd = skfda.FDataGrid(X, grid)
     X_test_fd = skfda.FDataGrid(X_test, grid)
 
 else:
-    real_data_name = "Tecator"
-    X_tecator, Y_tecator = skfda.datasets.fetch_tecator(return_X_y=True)
-    Y_tecator = Y_tecator[:, 1]  # Fat percentage
+    if REAL_DATA == "Tecator":
+        x, y = skfda.datasets.fetch_tecator(return_X_y=True)
+        y = np.log(y[:, 1])  # Log-Fat
+    elif REAL_DATA == "Weather":
+        data = skfda.datasets.fetch_weather()
+        x, y_func = data['data'].coordinates
+        y = np.log(y_func.data_matrix.sum(axis=1)[:, 0]) # Log-precipitation
+    else:
+        raise ValueError("REAL_DATA must be 'Tecator' or 'Weather'.")
 
     X_fd, X_test_fd, Y, Y_test = train_test_split(
-        X_tecator, Y_tecator, train_size=0.8, random_state=SEED)
+        x, y, train_size=0.8, random_state=SEED)
 
     N = len(X_fd.grid_points[0])
     grid = np.linspace(1./N, 1., N)  # TODO: use (normalized) real grid
     n_train, n_test = len(X_fd.data_matrix), len(X_test_fd.data_matrix)
 
 if BASIS_REPRESENTATION:
-    X_fd = X_fd.to_basis(basis).to_grid(grid)
-    X_test_fd = X_test_fd.to_basis(basis).to_grid(grid)
+    X_fd = X_fd.to_basis(basis).to_grid(X_fd.grid_points[0])
+    X_test_fd = X_test_fd.to_basis(basis).to_grid(X_fd.grid_points[0])
 
 if STANDARDIZE_PREDICTORS:
     X_sd = X_fd.data_matrix.std(axis=0)
@@ -359,8 +358,8 @@ if STANDARDIZE_RESPONSE:
     Y_m = Y.mean()
     Y_sd = Y.std()
 else:
-    Y_m = np.zeros(len(Y))
-    Y_sd = np.ones(len(Y))
+    Y_m = 0.0
+    Y_sd = 1.0
 
 # Standardize data
 X_m = X_fd.mean(axis=0)
@@ -412,12 +411,12 @@ num_etas = len(etas)
 
 n_walkers = 64
 n_iter_initial = 100
-n_iter = 1000
-return_pps = False
+n_iter = 1500
+return_pp = False
 thin = 1
 frac_random = 0.3
 
-sd_beta_init = 10.0
+sd_beta_init = 5.0
 sd_tau_init = 0.2
 mean_alpha0_init = Y.mean()
 sd_alpha0_init = 1.0
@@ -431,7 +430,7 @@ moves = [
 
 # -- Metrics parameters
 
-thin_ppc = 5
+thin_pp = 5
 point_estimates = ["mode", "mean", "median"]
 all_estimates = ["posterior_mean"] + point_estimates
 num_estimates = len(all_estimates)
@@ -465,7 +464,7 @@ try:
 
             #  -- Compute MLE and b0
 
-            print(f"[p={p}] Computing MLE")
+            print(f"[p={p}] Computing MLE...", end="")
 
             if mles[p] is None:
                 mle_theta, bic_theta = compute_mle(
@@ -492,6 +491,8 @@ try:
                 ]
             else:
                 mle_theta = mles[p]
+
+            print("done")
 
             b0 = mle_theta[theta_space.beta_idx]
 
@@ -533,7 +534,7 @@ try:
                         burn = 500
 
                     idata = utils.emcee_to_idata(
-                        sampler, theta_space, burn, thin, return_pps)
+                        sampler, theta_space, burn, thin, return_pp)
 
                     exec_times[rep, i, j, k] = time.time() - start
 
@@ -543,21 +544,21 @@ try:
                         np.mean(sampler.acceptance_fraction)
 
                     # Posterior mean estimate
-                    ppc_test = utils.generate_ppc(
-                        idata, X_test, theta_names, thin_ppc, rng=rng)
-                    Y_hat = ppc_test.mean(axis=(0, 1))
-                    metrics = utils.regression_metrics(Y_test, Y_hat)
-                    mse[rep, i, j, k, 0] = metrics["mse"]
-                    r2[rep, i, j, k, 0] = metrics["r2"]
+                    pp_test = utils.generate_pp(
+                        idata, X_test, theta_names, thin_pp, rng=rng, progress=False)
+                    Y_hat_pp = pp_test.mean(axis=(0, 1))
+                    metrics_pp = utils.regression_metrics(Y_test, Y_hat_pp)
+                    mse[rep, i, j, k, 0] = metrics_pp["mse"]
+                    r2[rep, i, j, k, 0] = metrics_pp["r2"]
 
                     # Point estimates
                     for m, pe in enumerate(point_estimates):
-                        Y_hat = utils.point_predict(
+                        Y_hat_pe = utils.point_predict(
                             X_test, idata,
                             theta_names, pe)
-                        metrics = utils.regression_metrics(Y_test, Y_hat)
-                        mse[rep, i, j, k, m + 1] = metrics["mse"]
-                        r2[rep, i, j, k, m + 1] = metrics["r2"]
+                        metrics_pe = utils.regression_metrics(Y_test, Y_hat_pe)
+                        mse[rep, i, j, k, m + 1] = metrics_pe["mse"]
+                        r2[rep, i, j, k, m + 1] = metrics_pe["r2"]
 
                     if PRINT_RESULTS_ONLINE:
                         min_pe = np.argmin(mse[rep, i, j, k, :])
@@ -708,8 +709,8 @@ if FIT_REF_ALGS:
         reg_cv = GridSearchCV(pipe, params, scoring="neg_mean_squared_error",
                               n_jobs=N_CORES, cv=folds)
         reg_cv.fit(X_fd, Y)
-        Y_hat = reg_cv.predict(X_test_fd)
-        metrics = utils.regression_metrics(Y_test, Y_hat)
+        Y_hat_sk = reg_cv.predict(X_test_fd)
+        metrics_sk = utils.regression_metrics(Y_test, Y_hat_sk)
 
         if name == "sk_fknn":
             n_features = f"K={reg_cv.best_params_['reg__n_neighbors']}"
@@ -726,9 +727,9 @@ if FIT_REF_ALGS:
         df_metrics_sk.loc[i] = [
             name,
             n_features,
-            metrics["mse"],
-            np.sqrt(metrics["mse"]),
-            metrics["r2"]]
+            metrics_sk["mse"],
+            np.sqrt(metrics_sk["mse"]),
+            metrics_sk["r2"]]
 
     df_metrics_sk.sort_values(results_columns_ref[-2], inplace=True)
 
@@ -741,7 +742,7 @@ if SYNTHETIC_DATA:
     if MODEL_GEN == "L2":
         data_name += beta_coef.__name__
 else:
-    data_name = real_data_name
+    data_name = REAL_DATA
 
 filename = ("emcee_" + data_name + "_transform_tau_" + str(TRANSFORM_TAU)
             + "_mle_" + mle_strategy + "_" + mle_method + "_frac_random_"
@@ -768,7 +769,7 @@ if SYNTHETIC_DATA:
         print(f"  β(t): {beta_coef.__name__}")
     print(f"  α0: {alpha0_true}\n  σ2: {sigma2_true}")
 else:
-    print(f"Data name: {real_data_name}")
+    print(f"Data name: {REAL_DATA}")
 print(f"Transform tau: {'true' if TRANSFORM_TAU else 'false'}")
 
 print("\n-- MLE PERFORMANCE --")
