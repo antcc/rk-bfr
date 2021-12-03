@@ -885,6 +885,7 @@ if PRINT_TO_FILE:
 else:
     print("\nShowing results...\n")
 
+print(" --> Bayesian Functional Linear Regression <--\n")
 print("-- MODEL GENERATION --")
 print(f"Train,test size: {n_train},{n_test}")
 if STANDARDIZE_PREDICTORS:

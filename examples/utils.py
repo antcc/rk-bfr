@@ -335,22 +335,29 @@ def plot_dataset(X, Y, plot_means=True, n_samples=None, figsize=(9, 4)):
         axs[1].legend()
 
 
-def plot_dataset_classification(X, Y, plot_means=True, figsize=(5, 4), ax=None):
+def plot_dataset_classification(X, Y, plot_means=True, n_samples=None, figsize=(5, 4), ax=None):
     fig, axs = plt.subplots(1, 2, figsize=figsize)
 
     n, N = X.shape
     grid = np.linspace(1./N, 1., N)
-    label0 = Y == 0
-    label1 = Y == 1
+    n_samples_0 = (Y == 0).sum()
+    n_samples_1 = (Y == 1).sum()
+
+    if n_samples is None:
+        plot_n0 = n_samples_0
+        plot_n1 = n_samples_1
+    else:
+        plot_n0 = int(n_samples_0*n_samples/len(Y))
+        plot_n1 = int(n_samples_1*n_samples/len(Y))
 
     axs[0].set_title(r"Labeled functional regressors $X_i(t)$")
     axs[0].set_xlabel(r"$t$")
-    if sum(label0) > 0:
-        axs[0].plot(grid, X.T[:, Y == 0], alpha=0.5, color="blue",
-                    label=["Class 0"] + [""]*(sum(Y == 0) - 1))
-    if sum(label1) > 0:
-        axs[0].plot(grid, X.T[:, Y == 1], alpha=0.5, color="red",
-                    label=["Class 1"] + [""]*(sum(Y == 1) - 1))
+    if plot_n0 > 0:
+        axs[0].plot(grid, X.T[:, Y == 0][:, :plot_n0], alpha=0.5, color="blue",
+                    label=["Class 0"] + [""]*(plot_n0 - 1))
+    if plot_n1 > 0:
+        axs[0].plot(grid, X.T[:, Y == 1][:, :plot_n1], alpha=0.5, color="red",
+                    label=["Class 1"] + [""]*(plot_n1 - 1))
 
     if plot_means:
         axs[0].plot(
@@ -363,13 +370,13 @@ def plot_dataset_classification(X, Y, plot_means=True, figsize=(5, 4), ax=None):
     axs[1].set_title("Class distribution")
     axs[1].set_xlabel("Class")
     axs[1].set_xticks([0, 1])
-    unique, counts = np.unique(Y, return_counts=True)
-    counts = counts/np.sum(counts)  # Get frequency
+    counts = [n_samples_0, n_samples_1]
+    freq = counts/np.sum(counts)
     if counts[0] > 0:
-        axs[1].bar(unique[0], counts[0], color="blue",
+        axs[1].bar(0, freq[0], color="blue",
                    label="Class 0", width=.3)
     if counts[1] > 0:
-        axs[1].bar(unique[1], counts[1], color="red",
+        axs[1].bar(1, freq[1], color="red",
                    label="Class 1", width=.3)
     axs[1].legend()
 
@@ -626,7 +633,7 @@ def generate_pp(
         return pp_y
 
 
-def pp_to_idata(pps, idata, var_names, y_obs=None):
+def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
     """All the pp arrays must have the same shape (the shape of y_obs)."""
     dim_name = "prediction"
     coords = idata.posterior[["chain", "draw"]].coords
@@ -641,18 +648,21 @@ def pp_to_idata(pps, idata, var_names, y_obs=None):
         group="posterior_predictive",
     )
 
-    if y_obs is None:
-        idata_obs = az.convert_to_inference_data(
-            idata.observed_data, group="observed_data")
+    if merge:
+        idata.extend(idata_pp)
     else:
-        idata_obs = az.convert_to_inference_data(
-            xr.Dataset(data_vars={"y_obs": ("observation", y_obs)},
-                       coords=coords),
-            group="observed_data")
+        if y_obs is None:
+            idata_aux = az.convert_to_inference_data(
+                idata.observed_data, group="observed_data")
+        else:
+            idata_aux = az.convert_to_inference_data(
+                xr.Dataset(data_vars={"y_obs": ("observation", y_obs)},
+                           coords=coords),
+                group="observed_data")
 
-    az.concat(idata_pp, idata_obs, inplace=True)
+        az.concat(idata_pp, idata_aux, inplace=True)
 
-    return idata_pp
+        return idata_pp
 
 
 def plot_ppc(idata, n_samples=None, ax=None, legend=False, **kwargs):
