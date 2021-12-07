@@ -38,8 +38,86 @@ np.set_printoptions(precision=3, suppress=True)
 pd.set_option("display.precision", 3)
 pd.set_option('display.max_columns', 80)
 
+###################################################################
+# GLOBAL OPTIONS
+###################################################################
+
+# Randomness and reproducibility
+SEED = int(sys.argv[1])
+np.random.seed(SEED)
+rng = np.random.default_rng(SEED)
+
+# Multiprocessing
+N_CORES = os.cpu_count()
+
+# Data
+SYNTHETIC_DATA = True
+MODEL_GEN = "RKHS"  # 'L2' or 'RKHS
+REAL_DATA = "Tecator"
+STANDARDIZE_PREDICTORS = False
+STANDARDIZE_RESPONSE = False
+BASIS_REPRESENTATION = True
+N_BASIS = 11
+TRANSFORM_TAU = False
+
+kernel_fn = utils.fractional_brownian_kernel
+beta_coef = utils.cholaquidis_scenario3
+basis = Fourier(n_basis=N_BASIS)
+folds = KFold(shuffle=True, random_state=SEED)
+
+# Results
+FIT_REF_ALGS = True
+REFIT_BEST_VAR_SEL = True
+PRINT_RESULTS_ONLINE = False
+PRINT_TO_FILE = False
+SAVE_RESULTS = False
+
+###################################################################
+# HYPERPARAMETERS
+###################################################################
+
+# -- Cv and Model parameters
+
+N_REPS = 5
+
+mle_method = 'L-BFGS-B'
+mle_strategy = 'global'
+
+ps = [2, 3, 4]
+gs = [5]
+etas = [0.01, 0.1, 1.0, 10.0]
+num_ps = len(ps)
+num_gs = len(gs)
+num_etas = len(etas)
+
+# -- Emcee sampler parameters
+
+n_walkers = 64
+n_iter_initial = 100
+n_iter = 1000
+return_pp = False
+return_ll = False
+thin = 1
+thin_pp = 5
+frac_random = 0.3
+
+sd_beta_init = 1.0
+sd_tau_init = 0.2
+sd_alpha0_init = 1.0
+param_sigma2_init = 2.0  # shape parameter in inv_gamma distribution
+sd_sigma2_init = 1.0
+
+moves = [
+    (emcee.moves.StretchMove(), 0.7),
+    (emcee.moves.WalkMove(), 0.3),
+]
+
+###################################################################
+# AUXILIARY FUNCTIONS
+###################################################################
 
 # -- MLE computation
+
 
 def neg_ll(theta_tr, X, Y, theta_space):
     """Transformed parameter vector 'theta_tr' is (β, logit τ, α0, log σ)."""
@@ -121,8 +199,8 @@ def compute_mle(
 
     return mle_theta, bic
 
-# -- Log-posterior model
 
+# -- Log-posterior model
 
 def log_prior(theta_tr):
     """Global parameters (for efficient parallelization):
@@ -161,32 +239,74 @@ def log_prior(theta_tr):
 
 
 def log_likelihood(theta_tr, Y):
-    """Global parameters (for efficient parallelization): X"""
-    return -neg_ll(theta_tr, X, Y, theta_space)
+    """Global parameters (for efficient parallelization):
+        X, theta_space, return_ll"""
+    n, N = X.shape
+    grid = theta_space.grid
+
+    assert len(theta_tr) == theta_space.ndim
+
+    theta = theta_space.backward(theta_tr)
+    beta, tau, alpha0, sigma2 = theta_space.get_params(theta)
+    log_sigma = theta_space.get_sigma2(theta_tr)
+
+    idx = np.abs(grid - tau[:, np.newaxis]).argmin(1)
+    X_tau = X[:, idx]
+
+    ll = (-n*log_sigma
+          - np.linalg.norm(Y - alpha0 - X_tau@beta)**2/(2*sigma2))
+
+    if return_ll:
+        # Add constant term so that it is the genuine log-probability
+        ll_pointwise = (-log_sigma - 0.5*np.log(2*np.pi)
+                        - (Y - alpha0 - X_tau@beta)**2/(2*sigma2))
+        return ll, ll_pointwise
+    else:
+        return ll
 
 
 def log_posterior(theta_tr, Y):
-    """Global parameters (for efficient parallelization): X, rng, return_pp"""
+    """Global parameters (for efficient parallelization):
+        X, rng, return_pp, return_ll, theta_space"""
+    # Compute log-prior
     lp = log_prior(theta_tr)
 
     if not np.isfinite(lp):
-        if return_pp:
-            return -np.inf, np.full_like(Y, -1.0)
+        if return_pp and return_ll:
+            return -np.inf, np.full_like(Y, -np.inf), np.full_like(Y, -np.inf)
+        elif return_pp:
+            return -np.inf, np.full_like(Y, -np.inf)
+        elif return_ll:
+            return -np.inf, np.full_like(Y, -np.inf)
         else:
             return -np.inf
 
-    ll = log_likelihood(theta_tr, Y)
+    # Compute log-likelihood (and possibly pointwise log-likelihood)
+    if return_ll:
+        ll, ll_pointwise = log_likelihood(theta_tr, Y)
+    else:
+        ll = log_likelihood(theta_tr, Y)
+
+    # Compute log-posterior
     lpos = lp + ll
 
+    # Compute posterior predictive samples
     if return_pp:
         theta = theta_space.backward(theta_tr)
         pp = utils.generate_response(X, theta, rng=rng)
+
+    # Return information
+    if return_pp and return_ll:
+        return lpos, pp, ll_pointwise
+    elif return_pp:
         return lpos, pp
+    elif return_ll:
+        return lpos, ll_pointwise
     else:
         return lpos
 
-# -- Sklearn CV and transformers
 
+# -- Sklearn CV and transformers
 
 def cv_sk(regressors, folds, X, Y, X_test, Y_test, columns_name, verbose=False):
 
@@ -217,7 +337,7 @@ def cv_sk(regressors, folds, X, Y, X_test, Y_test, columns_name, verbose=False):
             name,
             n_features,
             metrics_sk["mse"],
-            np.sqrt(metrics_sk["mse"]),
+            metrics_sk["rmse"],
             metrics_sk["r2"]]
 
     df_metrics_sk.sort_values(columns_name[-2], inplace=True)
@@ -327,7 +447,6 @@ def bayesian_var_sel(idata, theta_space, names,
 
 # -- Utility functions
 
-
 def iteration_count(total, current):
     """
     - total: list of total number of parameters
@@ -345,40 +464,6 @@ def iteration_count(total, current):
 
     return np.sum(aux*current).astype(int) + 1
 
-
-###################################################################
-# GLOBAL OPTIONS
-###################################################################
-
-# Randomness and reproducibility
-SEED = int(sys.argv[1])
-np.random.seed(SEED)
-rng = np.random.default_rng(SEED)
-
-# Multiprocessing
-N_CORES = 4
-
-# Data
-SYNTHETIC_DATA = False
-REAL_DATA = "Tecator"
-MODEL_GEN = "L2"
-STANDARDIZE_PREDICTORS = False
-STANDARDIZE_RESPONSE = False
-BASIS_REPRESENTATION = True
-N_BASIS = 5
-TRANSFORM_TAU = False
-
-kernel_fn = utils.fractional_brownian_kernel
-beta_coef = utils.grollemund_smooth
-basis = Fourier(n_basis=N_BASIS)
-folds = KFold(shuffle=True, random_state=SEED)
-
-# Results
-FIT_REF_ALGS = True
-REFIT_BEST_VAR_SEL = True
-PRINT_RESULTS_ONLINE = False
-PRINT_TO_FILE = False
-SAVE_RESULTS = False
 
 ###################################################################
 # GENERATE DATASET
@@ -421,13 +506,16 @@ if SYNTHETIC_DATA:
 else:
     if REAL_DATA == "Tecator":
         x, y = skfda.datasets.fetch_tecator(return_X_y=True)
-        y = np.sqrt(y[:, 1])  # Log-Fat
-    elif REAL_DATA == "Weather":
-        data = skfda.datasets.fetch_weather()
-        x, y_func = data['data'].coordinates
-        y = np.log(y_func.data_matrix.sum(axis=1)[:, 0])  # Log-precipitation
+        y = np.sqrt(y[:, 1])  # Sqrt-Fat
+    elif REAL_DATA == "Aemet":
+        data = skfda.datasets.fetch_aemet()['data']
+        data_matrix = data.data_matrix
+        temperature = data_matrix[:, :, 0]
+        x = FDataGrid(temperature, data.grid_points)
+        # Log-Sum of log-precipitation for each station
+        y = np.log(np.exp(data_matrix[:, :, 1]).sum(axis=1))
     else:
-        raise ValueError("REAL_DATA must be 'Tecator' or 'Weather'.")
+        raise ValueError("REAL_DATA must be 'Tecator' or 'Aemet'.")
 
     X_fd, X_test_fd, Y, Y_test = train_test_split(
         x, y, train_size=0.8, random_state=SEED)
@@ -461,6 +549,9 @@ X_test = X_test_fd.data_matrix.reshape(-1, N)
 Y = (Y - Y_m)/Y_sd
 Y_test = (Y_test - Y_m)/Y_sd
 
+# Mean of response variable
+mean_alpha0_init = Y.mean()
+
 # Names of parameters
 theta_names = ["β", "τ", "α0", "σ2"]
 if TRANSFORM_TAU:
@@ -471,7 +562,7 @@ theta_names_aux = ["α0 and log σ"]
 
 # Names of results
 results_columns_emcee = \
-    ["Estimator", "Features", "g", "η", "Mean_accpt (%)", "MSE", "RMSE", "R2"]
+    ["Estimator", "Features", "g", "η", "Mean_accpt(%)", "MSE", "RMSE", "R2"]
 results_columns_ref = ["Estimator", "Features", "MSE", "RMSE", "R2"]
 
 # Transformations
@@ -480,48 +571,8 @@ if TRANSFORM_TAU:
 else:
     tau_ttr = utils.Identity()
 
-###################################################################
-# HYPERPARAMETERS
-###################################################################
+# -- Estimators
 
-# -- Cv and Model parameters
-
-N_REPS = 5
-
-mle_method = 'L-BFGS-B'
-mle_strategy = 'global'
-
-ps = [3]
-gs = [5]
-etas = [0.01]
-num_ps = len(ps)
-num_gs = len(gs)
-num_etas = len(etas)
-
-# -- Emcee sampler parameters
-
-n_walkers = 64
-n_iter_initial = 100
-n_iter = 1000
-return_pp = False
-thin = 1
-frac_random = 0.3
-
-sd_beta_init = 1.0
-sd_tau_init = 0.2
-mean_alpha0_init = Y.mean()
-sd_alpha0_init = 1.0
-param_sigma2_init = 2.0  # shape parameter in inv_gamma distribution
-sd_sigma2_init = 1.0
-
-moves = [
-    (emcee.moves.StretchMove(), 0.7),
-    (emcee.moves.WalkMove(), 0.3),
-]
-
-# -- Metrics parameters
-
-thin_pp = 5
 point_estimates = ["mode", "mean", "median"]
 all_estimates = ["posterior_mean"] + point_estimates
 num_estimates = len(all_estimates)
@@ -535,6 +586,7 @@ print(f"Num. cores: {N_CORES}")
 
 mean_acceptance = np.zeros((N_REPS, num_ps, num_gs, num_etas))
 mse = np.zeros((N_REPS, num_ps, num_gs, num_etas, num_estimates))
+rmse = np.zeros((N_REPS, num_ps, num_gs, num_etas, num_estimates))
 r2 = np.zeros((N_REPS, num_ps, num_gs, num_etas, num_estimates))
 exec_times = np.zeros((N_REPS, num_ps, num_gs, num_etas))
 bics = np.zeros((N_REPS, num_ps))
@@ -578,7 +630,7 @@ try:
                     "mle",
                     p,
                     metrics_mle["mse"],
-                    np.sqrt(metrics_mle["mse"]),
+                    metrics_mle["rmse"],
                     metrics_mle["r2"]
                 ]
 
@@ -627,7 +679,8 @@ try:
                         burn = 500
 
                     idata = utils.emcee_to_idata(
-                        sampler, theta_space, burn, thin, ["y_star"] if return_pp else [])
+                        sampler, theta_space, burn, thin,
+                        ["y_star"] if return_pp else [], return_ll)
 
                     exec_times[rep, i, j, k] = time.time() - start
 
@@ -642,6 +695,7 @@ try:
                     Y_hat_pp = pp_test.mean(axis=(0, 1))
                     metrics_pp = utils.regression_metrics(Y_test, Y_hat_pp)
                     mse[rep, i, j, k, 0] = metrics_pp["mse"]
+                    rmse[rep, i, j, k, 0] = metrics_pp["rmse"]
                     r2[rep, i, j, k, 0] = metrics_pp["r2"]
 
                     # Point estimates
@@ -651,6 +705,7 @@ try:
                             theta_names, pe)
                         metrics_pe = utils.regression_metrics(Y_test, Y_hat_pe)
                         mse[rep, i, j, k, m + 1] = metrics_pe["mse"]
+                        rmse[rep, i, j, k, m + 1] = metrics_pe["rmse"]
                         r2[rep, i, j, k, m + 1] = metrics_pe["r2"]
 
                     if PRINT_RESULTS_ONLINE:
@@ -667,6 +722,9 @@ except KeyboardInterrupt:
     print("\n[INFO] Process halted by user. Skipping...")
     rep = rep - 1
 
+finally:
+    rep = N_REPS - 1
+
 ###################################################################
 # COMPUTE AVERAGE RESULTS
 ###################################################################
@@ -675,30 +733,31 @@ df_metrics_emcee = pd.DataFrame(columns=results_columns_emcee)
 min_mse = np.inf
 min_mse_params = (-1, -1, -1)  # (i, j, k)
 
-for i, p in enumerate(ps):
-    for j, g in enumerate(gs):
-        for k, eta in enumerate(etas):
-            for m, pe in enumerate(all_estimates):
-                it = iteration_count(
-                    [num_ps, num_gs, num_etas, num_estimates], [i, j, k, m])
+if rep + 1 > 0:
+    for i, p in enumerate(ps):
+        for j, g in enumerate(gs):
+            for k, eta in enumerate(etas):
+                for m, pe in enumerate(all_estimates):
+                    it = iteration_count(
+                        [num_ps, num_gs, num_etas, num_estimates], [i, j, k, m])
 
-                mean_mse = mse[:rep + 1, i, j, k, m].mean()
-                if mean_mse < min_mse:
-                    min_mse = mean_mse
-                    min_mse_params = (i, j, k)
+                    mean_mse = mse[:rep + 1, i, j, k, m].mean()
+                    if mean_mse < min_mse:
+                        min_mse = mean_mse
+                        min_mse_params = (i, j, k)
 
-                df_metrics_emcee.loc[it] = [
-                    "emcee_" + pe,
-                    p, g, eta,
-                    f"{mean_acceptance[:rep + 1, i, j, k].mean():.3f}"
-                    f"±{mean_acceptance[:rep + 1, i, j, k].std():.3f}",
-                    f"{mse[:rep + 1, i, j, k, m].mean():.3f}"
-                    f"±{mse[:rep + 1, i, j, k, m].std():.3f}",
-                    f"{np.sqrt(mse[:rep + 1, i, j, k, m]).mean():.3f}"
-                    f"±{np.sqrt(mse[:rep + 1, i, j, k, m]).std():.3f}",
-                    f"{r2[:rep + 1, i, j, k, m].mean():.3f}"
-                    f"±{r2[:rep + 1, i, j, k, m].std():.3f}"
-                ]
+                    df_metrics_emcee.loc[it] = [
+                        "emcee_" + pe,
+                        p, g, eta,
+                        f"{mean_acceptance[:rep + 1, i, j, k].mean():.3f}"
+                        f"±{mean_acceptance[:rep + 1, i, j, k].std():.3f}",
+                        f"{mse[:rep + 1, i, j, k, m].mean():.3f}"
+                        f"±{mse[:rep + 1, i, j, k, m].std():.3f}",
+                        f"{rmse[:rep + 1, i, j, k, m].mean():.3f}"
+                        f"±{rmse[:rep + 1, i, j, k, m].std():.3f}",
+                        f"{r2[:rep + 1, i, j, k, m].mean():.3f}"
+                        f"±{r2[:rep + 1, i, j, k, m].std():.3f}"
+                    ]
 
 df_metrics_mle.sort_values(results_columns_ref[-2], inplace=True)
 df_metrics_emcee.sort_values(results_columns_emcee[-2], inplace=True)
@@ -749,7 +808,8 @@ if REFIT_BEST_VAR_SEL and rep + 1 > 0:
     logging.disable(logging.NOTSET)  # Re-enable logger
 
     idata = utils.emcee_to_idata(
-        sampler, theta_space, burn, thin, ["y_star"] if return_pp else [])
+        sampler, theta_space, burn, thin,
+        ["y_star"] if return_pp else [], return_ll)
 
     # -- Bayesian variable selection
 
@@ -866,9 +926,9 @@ if FIT_REF_ALGS:
 ###################################################################
 
 if SYNTHETIC_DATA:
-    data_name = kernel_fn.__name__ + "_" + MODEL_GEN + "_"
+    data_name = kernel_fn.__name__ + "_" + MODEL_GEN
     if MODEL_GEN == "L2":
-        data_name += beta_coef.__name__
+        data_name += ("_" + beta_coef.__name__)
 else:
     data_name = REAL_DATA
 
@@ -887,7 +947,7 @@ else:
 
 print(" --> Bayesian Functional Linear Regression <--\n")
 print("-- MODEL GENERATION --")
-print(f"Train,test size: {n_train},{n_test}")
+print(f"Train/test size: {n_train}/{n_test}")
 if STANDARDIZE_PREDICTORS:
     print("Standardized predictors")
 if STANDARDIZE_RESPONSE:
@@ -896,9 +956,11 @@ if BASIS_REPRESENTATION:
     print(f"Basis: {basis.__class__.__name__}(n={N_BASIS})")
 else:
     print("Basis: None")
+print(f"Transform tau: {'true' if TRANSFORM_TAU else 'false'}")
+
 if SYNTHETIC_DATA:
-    print(f"GP kernel: {kernel_fn.__name__}")
     print(f"Model type: {MODEL_GEN}")
+    print(f"X ~ GP(0, {kernel_fn.__name__})")
     print("True parameters:")
     if MODEL_GEN == "RKHS":
         print(f"  β: {beta_true}\n  τ: {tau_true}")
@@ -907,50 +969,54 @@ if SYNTHETIC_DATA:
     print(f"  α0: {alpha0_true}\n  σ2: {sigma2_true}")
 else:
     print(f"Data name: {REAL_DATA}")
-print(f"Transform tau: {'true' if TRANSFORM_TAU else 'false'}")
 
-print("\n-- MLE PERFORMANCE --")
-bics_mean = bics[:rep + 1, ...].mean(axis=0)
-for i, p in enumerate(ps):
-    print(f"BIC [p={p}]: {bics_mean[i]:.3f}")
-print("")
-print(df_metrics_mle.to_string(index=False, col_space=6))
+if rep + 1 > 0:
+    print("\n-- MLE PERFORMANCE --")
+    bics_mean = bics[:rep + 1, ...].mean(axis=0)
+    for i, p in enumerate(ps):
+        print(f"BIC [p={p}]: {bics_mean[i]:.3f}")
+    print("")
+    print(df_metrics_mle.to_string(index=False, col_space=6))
 
-print("\n-- EMCEE SAMPLER --")
-print(f"N_walkers: {n_walkers}")
-print(f"N_iters: {n_iter}")
-print(f"MLE: {mle_method} + {mle_strategy}")
-print(f"Frac_random: {frac_random}")
-print(f"Burn-in: {n_iter_initial}")
-print(f"Thinning chain,pp: {thin},{thin_pp}")
-print("Moves:")
-for move, prob in moves:
-    print(f"  {move.__class__.__name__}, {prob}")
+    print("\n-- EMCEE SAMPLER --")
+    print(f"N_walkers: {n_walkers}")
+    print(f"N_iters: {n_iter}")
+    print(f"MLE: {mle_method} + {mle_strategy}")
+    print(f"Frac_random: {frac_random}")
+    print(f"Burn-in: {n_iter_initial} + 3*max_autocorr")
+    print(f"Thinning chain/pp: {thin}/{thin_pp}")
+    print("Moves:")
+    for move, prob in moves:
+        print(f"  {move.__class__.__name__}, {prob}")
 
-print("\n-- RESULTS EMCEE --")
-print(f"Random iterations: {rep + 1}")
-print(
-    f"Mean execution time: {exec_times[:rep + 1, ...].mean():.3f}"
-    f"±{exec_times[:rep + 1, ...].std():.3f} s")
-print(f"Total execution time: {exec_times.sum()/60.:.3f} min\n")
-print(df_metrics_emcee.to_string(index=False, col_space=6))
+    print("\n-- RESULTS EMCEE --")
+    print(f"Random iterations: {rep + 1}")
+    print(
+        f"Mean execution time: {exec_times[:rep + 1, ...].mean():.3f}"
+        f"±{exec_times[:rep + 1, ...].std():.3f} s")
+    print(f"Total execution time: {exec_times.sum()/60.:.3f} min\n")
+    print(df_metrics_emcee.to_string(index=False, col_space=6))
 
-if REFIT_BEST_VAR_SEL:
-    print("\n-- RESULTS BAYESIAN VARIABLE SELECTION --\n")
-    print(df_metrics_var_sel.to_string(index=False, col_space=6))
+    if REFIT_BEST_VAR_SEL:
+        print("\n-- RESULTS BAYESIAN VARIABLE SELECTION --\n")
+        i, j, k = min_mse_params
+        p, g, eta = ps[i], gs[j], etas[k]
+        print(f"Base model: p={p}, g={g}, η={eta}\n")
+        print(df_metrics_var_sel.to_string(index=False, col_space=6))
+
 if FIT_REF_ALGS:
     print("\n-- RESULTS SKLEARN --\n")
     print(df_metrics_sk.to_string(index=False, col_space=6))
-
 
 ###################################################################
 # SAVE RESULTS
 ###################################################################
 
-if SAVE_RESULTS:
+if SAVE_RESULTS and rep + 1 > 0:
     np.savez(
         filename + ".npz",
         mean_acceptance=mean_acceptance[:rep + 1, ...],
         mse=mse[:rep + 1, ...],
+        rmse=rmse[:rep + 1, ...],
         r2=r2[:rep + 1, ...]
     )

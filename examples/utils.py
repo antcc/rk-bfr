@@ -539,40 +539,42 @@ def plot_evolution(trace, labels):
     axes[-1].set_xlabel("step")
 
 
-def emcee_to_idata(sampler, theta_space, burn, thin, blob_names=[]):
+def emcee_to_idata(sampler, theta_space, burn, thin, pp_names=[], is_blob_ll=False):
     names = theta_space.names
     names_ttr = theta_space.names_ttr
     p = theta_space.p
-    n_blobs = len(blob_names)
+    n_pp = len(pp_names)
+    blob_names = []
+    blob_groups = []
+    dims = {f"{names_ttr[0]}": ["vector"],
+            f"{names_ttr[1]}": ["vector"],
+            "y_obs": ["observation"]}
 
-    if n_blobs > 0:
+    if n_pp > 0:
         new_vars = {}
-        for name in blob_names:
+        for name in pp_names:
             new_vars[name] = ["prediction"]
 
-        idata = az.from_emcee(
-            sampler,
-            var_names=names_ttr,
-            slices=[slice(0, p), slice(p, 2*p), -2, -1],
-            arg_names=["y_obs"],
-            blob_names=blob_names,
-            blob_groups=n_blobs*["posterior_predictive"],
-            dims={
-                **{f"{names_ttr[0]}": ["vector"],
-                   f"{names_ttr[1]}": ["vector"],
-                   "y_obs": ["observation"]}, **new_vars}
-        )
+        blob_names = pp_names
+        blob_groups = n_pp*["posterior_predictive"]
+        dims = {**dims, **new_vars}
+    if is_blob_ll:
+        blob_names += ["y_obs"]
+        blob_groups += ["log_likelihood"]
 
-    else:
-        idata = az.from_emcee(
-            sampler,
-            var_names=names_ttr,
-            slices=[slice(0, p), slice(p, 2*p), -2, -1],
-            arg_names=["y_obs"],
-            dims={f"{names_ttr[0]}": ["vector"],
-                  f"{names_ttr[1]}": ["vector"],
-                  "y_obs": ["observation"]},
-        )
+    if len(blob_names) == 0:  # No blobs
+        blob_names = None
+        blob_groups = None
+
+    idata = az.from_emcee(
+        sampler,
+        var_names=names_ttr,
+        slices=[slice(0, p), slice(p, 2*p), -2, -1],
+        arg_names=["y_obs"],
+        blob_names=blob_names,
+        blob_groups=blob_groups,
+        dims=dims
+    )
 
     # Burn-in and thinning
     idata = idata.sel(draw=slice(burn, None, thin))
@@ -745,10 +747,12 @@ def point_predict(X, idata, names, pe='mean', kind='regression'):
 def regression_metrics(Y, Y_hat):
     """Quantify the goodness-of-fit of a regression model."""
     mse = np.mean((Y - Y_hat)**2)
+    rmse = np.sqrt(mse)
     r2 = r2_score(Y, Y_hat)
 
     metrics = {
         "mse": mse,
+        "rmse": rmse,
         "r2": r2
     }
 
