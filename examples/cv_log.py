@@ -992,7 +992,7 @@ if SYNTHETIC_DATA:
 else:
     data_name = REAL_DATA
 
-filename = ("emcee_" + data_name + "_basis_"
+filename = ("emcee_" + data_name + "_noise_" + str(int(100*NOISE)) + "_basis_"
             + (basis.__class__.__name__ if BASIS_REPRESENTATION else "None")
             + "_frac_random_" + str(int(100*frac_random)) + "_walkers_"
             + str(n_walkers) + "_iters_" + str(n_iter) + "_reps_"
@@ -1014,6 +1014,7 @@ if BASIS_REPRESENTATION:
     print(f"Basis: {basis.__class__.__name__}(n={N_BASIS})")
 else:
     print("Basis: None")
+print(f"Noise: {NOISE}")
 print(f"Transform tau: {'true' if TRANSFORM_TAU else 'false'}")
 
 if SYNTHETIC_DATA:
