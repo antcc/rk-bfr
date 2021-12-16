@@ -9,6 +9,9 @@ _*.txt
 # Ignore results files
 *.results
 
+# Ignore helper files
+graphs.ipynb
+
 # Ignore pickled files
 *.mcmc
 *.idata

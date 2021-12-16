@@ -77,17 +77,22 @@ extendedchars=true
 
 % TÍTULO
 
-\title{Title}
+\title{Métodos Bayesianos en modelos RKHS para regresión funcional}
 \providecommand{\subtitle}[1]{}
-\subtitle{Subtitle}
-\date{\today}
-\author{Antonio Coín Castro}
-\institute{Institute}
+\subtitle{Borrador de ideas y resultados preliminares}
+\date{\today \\}
+\author{Antonio Coín \\ José R. Berrendero \\ Antonio Cuevas\\}
+\institute{Universidad Autónoma de Madrid \\ \textit{Departamento de Matemáticas}}
 
+\titlegraphic{
+  \begin{textblock*}{3cm}(9cm,5.7cm)
+    \includegraphics[width=3cm]{img/logo-uam}
+  \end{textblock*}
+}
 % DOCUMENTO
 
 \begin{document}
-%\maketitle
+\maketitle
 
 \section{Regresión Lineal Funcional Bayesiana}
 
@@ -123,26 +128,23 @@ extendedchars=true
 \begin{frame}{Aproximación de la posteriori}
   \textbf{Procedimiento:} Utilizar métodos MCMC para aproximar la distribución a posteriori. En concreto, se barajan tres alternativas:
   \begin{itemize}
-    \item {\color{Maroon}\textit{Affine-Invariant Ensemble Sampler}}. Conjunto de cadenas que se influencian mutuamente para dar cada paso.
+    \item {\color{Maroon}\textit{Affine-Invariant Ensemble Sampler (emcee)}}. Conjunto de cadenas que se influencian mutuamente para dar cada paso.
     \item \textit{NUTS}. Algoritmo que utiliza información del gradiente de la función objetivo para dar cada paso.
     \item \textit{Metropolis}. Algoritmo estándar de \textit{markov chain monte carlo}.
   \end{itemize}
 
   \vspace{1em}
 
-  Los resultados son similares.
+  Los resultados entre \textit{NUTS} y \textit{emcee} son similares.
 \end{frame}
 
-\begin{frame}{Algoritmo}
-  Fijamos algunos hiperparámetros:
+\begin{frame}{Estimación de máxima verosimilitud}
+  Una primera aproximación consiste en estimar directamente los parámetros por máxima verosimilitud mediante un enfoque computacional.
   \begin{itemize}
-    \item Número de cadenas: 64.
-    \item Número de pasos: 100 + 1000.
-    \item Movimientos: elección aleatoria (ponderada) entre dos de los recomendados, \textit{stretch} y \textit{walk}.
-    \item Inicialización: Entorno aleatorio del MLE + muestras de las distribuciones a priori.
-    \item Prior de \(\beta\): \(b_0\) se elige como el MLE de \(\beta\), y fijamos \(g=5\) (recomendado en \textit{Grollemund et al. (2019)}).
+    \item Usamos el algoritmo estocástico \textit{basin-hopping}, un método de dos fases que combina minimización local con un procedimiento de salto global.
+    \item Como algoritmo de minimización local escogemos el método quasi-Newton \textit{L-BFGS-B}, que permite especificar restricciones para \(\tau\).
+    \item Como el algoritmo implica aleatoriedad, hacemos varias ejecuciones independientes y elegimos la estimación que proporcione un mayor valor del \textit{likelihood}.
   \end{itemize}
-  \vspace{1em}
 \end{frame}
 
 \begin{frame}{Model checking}
@@ -216,8 +218,7 @@ Consideramos una malla regular de \(N=100\) puntos en \([0, 1]\), y un reparto d
 \begin{frame}{Preprocesado de los datos}
   \begin{itemize}
     \item Se centran los regresores para que tengan media \(0\). Opcionalmente, se pueden estandarizar en cada punto de la malla.
-    \item Se permite estandarizar también la respuesta \(Y\).
-    \item Se permite \textbf{sustituir los datos \(\boldsymbol{X_i}\) por su expansión en una base} de Fourier, con un número determinado de coeficientes. De esta forma realizamos un suavizado de las curvas.
+    \item Se permite \textbf{sustituir los datos \(\boldsymbol{X_i}\) por su desarrollo en una base} de Fourier, con un número determinado de coeficientes. De esta forma realizamos un suavizado de las curvas.
   \end{itemize}
 \end{frame}
 
@@ -247,10 +248,24 @@ Consideramos una malla regular de \(N=100\) puntos en \([0, 1]\), y un reparto d
 
   \item Para aumentar la estabilidad hacemos 5 repeticiones de cada modelo. Es decir, entrenamos un total de 60 modelos sobre el conjunto de entrenamiento
 
-  \item Con el mejor modelo obtenido se realiza también una selección de variables basada en los valores de \(\tau\) estimados mediante los distintos estimadores puntuales.
+  \item Con el \textbf{mejor modelo obtenido} se realiza también una selección de variables basada en los valores de \(\tau\) estimados mediante los distintos estimadores puntuales.
 \end{itemize}
 
 Además, repetimos este proceso con los datos suavizados en una base de Fourier con 11 elementos (también con los algoritmos de comparación).
+\end{frame}
+
+\begin{frame}{Metodología experimental II}
+  Fijamos algunos hiperparámetros:
+  \begin{itemize}
+    \item Número de cadenas: 64.
+    \item Número de pasos: 100 + 1000.
+    \item Movimientos: elección aleatoria (ponderada) entre dos de los recomendados, \textit{stretch} y \textit{walk}.
+    \item Inicialización: Entorno aleatorio del MLE + muestras de las distribuciones a priori.
+    \item Prior de \(\beta\): \(b_0\) se elige como el MLE de \(\beta\), y fijamos \(g=5\) (recomendado en \textit{Grollemund et al. (2019)}).
+  \end{itemize}
+  \vspace{1em}
+
+  \textit{Nota:} El valor de \(g\) no parece afectar al resultado, por lo que podríamos eliminar este parámetro.
 \end{frame}
 
 \begin{frame}{Resultados RKHS}
@@ -275,6 +290,24 @@ Además, repetimos este proceso con los datos suavizados en una base de Fourier 
   \end{table}
 \end{frame}
 
+\begin{frame}{Resultados RKHS II}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/lin_rkhs_fbm_nobase}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/lin_rkhs_ou_nobase}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/lin_rkhs_rbf_nobase}
+    \caption{MSE de los 5 mejores modelos en cada caso con el modelo subyacente RKHS y sin usar suavizado con bases. Distinguimos los algoritmos de comparación, nuestro algoritmo Bayesiano (emcee), y nuestra selección de variables Bayesiana.}
+  \end{figure}
+\end{frame}
+
+\begin{frame}{Resultados RKHS III}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/lin_rkhs_fbm_base11}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/lin_rkhs_ou_base11}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/lin_rkhs_rbf_base11}
+    \caption{MSE de los 5 mejores modelos en cada caso con el modelo subyacente RKHS y con base de Fourier.}
+  \end{figure}
+\end{frame}
+
 \begin{frame}{Resultados \(\boldsymbol{L^2}\)}
 \textbf{Sin base}
   \begin{table}
@@ -285,8 +318,7 @@ Además, repetimos este proceso con los datos suavizados en una base de Fourier 
       RBF & \xmark & \xmark
     \end{tabular}
   \end{table}
-
-  \textbf{Base Fourier(11)}
+\textbf{Base Fourier(11)}
   \begin{table}
     \begin{tabular}{c|cc}
       Kernel & Victoria & Victoria sel. variables \\ \hline
@@ -295,6 +327,24 @@ Además, repetimos este proceso con los datos suavizados en una base de Fourier 
       RBF & \xmark & \xmark
     \end{tabular}
   \end{table}
+\end{frame}
+
+\begin{frame}{Resultados \(\boldsymbol{L^2}\) II}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/lin_l2_fbm_nobase}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/lin_l2_ou_nobase}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/lin_l2_rbf_nobase}
+    \caption{MSE de los 5 mejores modelos en cada caso con el modelo subyacente \(L^2\) y sin usar suavizado con bases.}
+  \end{figure}
+\end{frame}
+
+\begin{frame}{Resultados \(\boldsymbol{L^2}\) III}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/lin_l2_fbm_base11}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/lin_l2_ou_base11}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/lin_l2_rbf_base11}
+    \caption{MSE de los 5 mejores modelos en cada caso con el modelo subyacente \(L^2\) y con base de Fourier.}
+  \end{figure}
 \end{frame}
 
 \begin{frame}{Resultados datos reales}
@@ -317,6 +367,22 @@ Además, repetimos este proceso con los datos suavizados en una base de Fourier 
   \end{table}
 \end{frame}
 
+\begin{frame}{Resultados datos reales II}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/lin_tecator_nobase}\hspace{5em}
+    \includegraphics[width=0.3\textwidth]{img/results/lin_aemet_nobase}
+    \caption{MSE de los 5 mejores modelos en cada caso con datos reales y sin usar suavizado con bases.}
+  \end{figure}
+\end{frame}
+
+\begin{frame}{Resultados datos reales III}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/lin_tecator_base11}\hspace{5em}
+    \includegraphics[width=0.3\textwidth]{img/results/lin_aemet_base11}
+    \caption{MSE de los 5 mejores modelos en cada caso con datos reales y con base de Fourier.}
+  \end{figure}
+\end{frame}
+
 \begin{frame}{Algunas observaciones}
 \begin{itemize}
   \item Por cada modelo entrenado obtenemos 4 estimadores y 3 estrategias de selección de variables.
@@ -337,7 +403,7 @@ Además, repetimos este proceso con los datos suavizados en una base de Fourier 
   \item El algoritmo MCMC es costoso, y en conjuntos de datos grandes las estrategias de \textit{cross-validation} para seleccionar parámetros pueden no ser viables.
   \item Es necesario un procedimiento para seleccionar el valor de \(p\) (BIC, WAIC, WBIC, \textit{cross-validation}, ...).
   \item Debido a la aleatoriedad del algoritmo, los resultados pueden variar sustancialmente de una ejecución a otra.
-  \item La distribución a priori para \(\beta\) depende en gran medida del valor de  escogido. Si su estimación inicial no es buena, el algoritmo no funciona demasiado bien.
+  \item La distribución a priori para \(\beta\) depende en gran medida del valor de \(b_0\) escogido. Si su estimación inicial no es buena, el algoritmo no funciona demasiado bien.
 \end{itemize}
 \end{frame}
 
@@ -345,14 +411,16 @@ Además, repetimos este proceso con los datos suavizados en una base de Fourier 
   \begin{itemize}
     \item Hay un problema de \textit{identificabilidad} de los coeficientes (son intercambiables), que se agudiza especialmente al usar varias cadenas.
     \item En el caso en el que el modelo subyacente es RKHS, es posible que no se recuperen los verdaderos valores de los parámetros debido a interacciones entre los coeficientes (si \(p\) es mayor que el número real de componentes).
+    \item El uso de distribuciones a priori impropias implica comprobar que \(\int_{\Theta} \pi(Y\mid \theta)\pi(\theta)\, d\theta < \infty\).
   \end{itemize}
 \end{frame}
 
 \begin{frame}{Alternativas}
   \begin{itemize}
-    \item Explorar el concepto de \textit{online learning} aplicado a esta situación, por ejemplo usando como priori de nuevos datos la posteriori aprendida.
+    \item Explorar el concepto de \textit{online learning} aplicado a esta situación, por ejemplo usando como priori de nuevos datos la posteriori aprendida. Estudiar la \textbf{consistencia} de la distribución a posteriori.
     \item Utilizar otras herramientas de suavizado en lugar de bases de Fourier.
     \item Sustitutir la distribución a priori de \(\beta\) por otra que requiera menos hiperparámetros.
+    \item Sustituir las distribuciones impropias por otras propias.
   \end{itemize}
 
 \end{frame}
@@ -388,9 +456,9 @@ p_i \equiv p(x_i)=\mathbb P(Y_i=1\mid X_i=x_i) = \frac{1}{1 + \exp\left\{-\alpha
 \begin{frame}{Predicciones}
 
 \begin{itemize}
-  \item Establecemos un umbral en \(0.5\) para establecer la pertenencia a las clases.
+  \item Fijamos un umbral en \(0.5\) para establecer la pertenencia a las clases.
    \item Los estimadores puntuales y la selección de variables son análogos al caso de regresión lineal.
-   \item Tenemos ahora dos estimadores basados en la distribución a posteriori:
+   \item Tenemos ahora dos estimadores basados en la distribución a posteriori (similares a los \textit{ensembles} de clasificadores):
    \begin{itemize}
      \item[--] Basado en el voto mayoritario de las muestras \(Y^*\) generadas.
      \item[--] Basado en la media de las probabilidades \(p_i^*\) generadas (con aplicación posterior del umbral).
@@ -402,10 +470,7 @@ p_i \equiv p(x_i)=\mathbb P(Y_i=1\mid X_i=x_i) = \frac{1}{1 + \exp\left\{-\alpha
 \subsection{Experimentos}
 
 \begin{frame}{Datos sintéticos}
-  \begin{itemize}
-
-
-  \item Misma estrategia de generación que antes. Se elige
+Seguimos la misma estrategia de generación de datos antes. Se consideran las mismas tres funciones de covarianza y se genera la respuesta tanto con un modelo RKHS como L2, i.e.:
   \[
     Y_i \sim \mathcal B\left(\frac{1}{1 + \exp\left\{0.5 + 5X_i(0.1) - 10X_i(0.8)\right\}}\right)
   \]
@@ -416,13 +481,8 @@ p_i \equiv p(x_i)=\mathbb P(Y_i=1\mid X_i=x_i) = \frac{1}{1 + \exp\left\{-\alpha
 
   \vspace{1em}
 
-  \item Añadimos una nueva estrategia: generar datos procedentes de dos procesos distintos, y etiquetarlos acorde a su verdadera distribución.
-  \begin{itemize}
-    \item[--] Browniano vs. browniano fraccional.
-    \item[--] RBF vs. Ornstein-Uhlenbeck.
-    \item[--] RBF(0.2) vs. RBF(0.5).
-  \end{itemize}
-\end{itemize}
+  Se introduce un pequeño ruido aleatorio en las etiquetas, y además se intenta que ambas clases estén balanceadas.
+
 \end{frame}
 
 \begin{frame}{Datos reales}
@@ -456,7 +516,7 @@ p_i \equiv p(x_i)=\mathbb P(Y_i=1\mid X_i=x_i) = \frac{1}{1 + \exp\left\{-\alpha
   \begin{table}
     \begin{tabular}{c|cc}
       Kernel & Victoria & Victoria sel. variables \\ \hline
-      fBM & \cmark & \xmark\\
+      fBM & \xmark & \xmark\\
       O-U & \xmark & \cmark\\
       RBF & \cmark & \xmark
     \end{tabular}
@@ -471,6 +531,24 @@ p_i \equiv p(x_i)=\mathbb P(Y_i=1\mid X_i=x_i) = \frac{1}{1 + \exp\left\{-\alpha
       RBF & \cmark & \cmark
     \end{tabular}
   \end{table}
+\end{frame}
+
+\begin{frame}{Resultados RKHS II}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/log_rkhs_fbm_nobase}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/log_rkhs_ou_nobase}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/log_rkhs_rbf_nobase}
+    \caption{Precisión de los 5 mejores modelos en cada caso con el modelo subyacente RKHS y sin usar suavizado con bases. Distinguimos los algoritmos de comparación, nuestro algoritmo Bayesiano (emcee), y nuestra selección de variables Bayesiana.}
+  \end{figure}
+\end{frame}
+
+\begin{frame}{Resultados RKHS III}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/log_rkhs_fbm_base9}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/log_rkhs_ou_base9}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/log_rkhs_rbf_base9}
+    \caption{Precisión de los 5 mejores modelos en cada caso con el modelo subyacente RKHS y con base de Fourier.}
+  \end{figure}
 \end{frame}
 
 \begin{frame}{Resultados \(\boldsymbol{L^2}\)}
@@ -495,28 +573,22 @@ p_i \equiv p(x_i)=\mathbb P(Y_i=1\mid X_i=x_i) = \frac{1}{1 + \exp\left\{-\alpha
   \end{table}
 \end{frame}
 
-\begin{frame}{Resultados MIXTURE}
-\textbf{Sin base}
-  \begin{table}
-    \begin{tabular}{c|cc}
-      Kernel & Victoria & Victoria sel. variables \\ \hline
-      fBM + BM & \xmark & \xmark\\
-      O-U + RBF & \xmark & \xmark\\
-      RBF(0.2) + RBF(0.5) & \xmark & \xmark
-    \end{tabular}
-  \end{table}
+\begin{frame}{Resultados \(L^2\) II}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/log_l2_fbm_nobase}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/log_l2_ou_nobase}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/log_l2_rbf_nobase}
+    \caption{Precisión de los 5 mejores modelos en cada caso con el modelo subyacente \(L^2\) y sin usar suavizado con bases.}
+  \end{figure}
+\end{frame}
 
-  \textbf{Base Fourier(9)}
-  \begin{table}
-    \begin{tabular}{c|cc}
-      Kernel & Victoria & Victoria sel. variables \\ \hline
-      fBM + BM & \xmark &  \xmark\\
-      O-U + RBF & \xmark & \xmark\\
-      RBF(0.2) + RBF(0.5) & \xmark & \cmark
-    \end{tabular}
-  \end{table}
-
-  En este caso, los resultados de nuestro algoritmo son bastante malos (peor que un algoritmo aleatorio).
+\begin{frame}{Resultados \(L^2\) III}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/log_l2_fbm_base9}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/log_l2_ou_base9}\hfill
+    \includegraphics[width=0.3\textwidth]{img/results/log_l2_rbf_base9}
+    \caption{Precisión de los 5 mejores modelos en cada caso con el modelo subyacente \(L^2\) y con base de Fourier.}
+  \end{figure}
 \end{frame}
 
 \begin{frame}{Resultados datos reales}
@@ -539,6 +611,22 @@ p_i \equiv p(x_i)=\mathbb P(Y_i=1\mid X_i=x_i) = \frac{1}{1 + \exp\left\{-\alpha
   \end{table}
 
   Tanto en las victorias como en las derrotas, la precisión es muy similar. Podemos considerar un empate en ambos conjuntos.
+\end{frame}
+
+\begin{frame}{Resultados datos reales II}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/log_medflies_nobase}\hspace{5em}
+    \includegraphics[width=0.3\textwidth]{img/results/log_growth_nobase}
+    \caption{Precisión de los 5 mejores modelos en cada caso con datos reales y sin usar suavizado con bases.}
+  \end{figure}
+\end{frame}
+
+\begin{frame}{Resultados datos reales III}
+  \begin{figure}
+    \includegraphics[width=0.3\textwidth]{img/results/log_medflies_base9}\hspace{5em}
+    \includegraphics[width=0.3\textwidth]{img/results/log_growth_base9}
+    \caption{Precisión de los 5 mejores modelos en cada caso con datos reales y con base de Fourier.}
+  \end{figure}
 \end{frame}
 
 \end{document}
