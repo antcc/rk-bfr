@@ -15,7 +15,7 @@ import skfda
 from skfda.preprocessing.dim_reduction.feature_extraction import FPCA
 from skfda.ml.regression import LinearRegression as FLinearRegression
 from skfda.ml.regression import KNeighborsRegressor
-from skfda.representation.basis import FDataBasis, Fourier
+from skfda.representation.basis import FDataBasis, Fourier, BSpline
 from skfda.representation.grid import FDataGrid
 
 from sklearn.model_selection import train_test_split, GridSearchCV
@@ -837,8 +837,10 @@ if FIT_REF_ALGS:
     alphas = np.logspace(-4, 4, 20)
     n_selected = [5, 10, 15, 20, 25, X.shape[1]]
     n_components = [2, 3, 4, 5, 6, 10]
-    n_basis = [3, 5, 7, 9, 11]
-    basis_fourier = [Fourier(n_basis=p) for p in n_basis]
+    n_basis_bsplines = [8, 10, 12, 14, 16]
+    n_basis_fourier = [3, 5, 7, 9, 11]
+    basis_bspline = [BSpline(n_basis=p) for p in n_basis_bsplines]
+    basis_fourier = [Fourier(n_basis=p) for p in n_basis_fourier]
     n_neighbors = [3, 5, 7]
 
     params_reg = {"reg__alpha": alphas}
@@ -846,7 +848,7 @@ if FIT_REF_ALGS:
                   "reg__gamma": ['auto', 'scale']}
     params_select = {"selector__p": n_selected}
     params_fpca = {"dim_red__n_components": n_components}
-    params_basis = {"basis__basis": basis_fourier}
+    params_basis = {"basis__basis": basis_fourier + basis_bspline}
     params_knn = {"reg__n_neighbors": n_neighbors,
                   "reg__weights": ['uniform', 'distance']}
 

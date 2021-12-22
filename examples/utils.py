@@ -224,31 +224,34 @@ def generate_response_logistic(X, theta, prob=True, return_p=False, rng=None):
         return Y
 
 
-def gp(grid, kernel_fn, n_samples, rng=None):
+def gp(grid, mean_vector, kernel_fn, n_samples, rng=None):
     if rng is None:
         rng = np.random.default_rng()
 
-    N = len(grid)
-    mean_vector = np.zeros(N)
     kernel_matrix = cov_matrix(kernel_fn, grid, grid)
 
     X = rng.multivariate_normal(mean_vector, kernel_matrix, size=n_samples)
-    X = X - X.mean(axis=0)
+    X = X - X.mean(axis=0)  # Center data
     return X
 
 
 def generate_gp_l2_dataset(
         grid, kernel_fn, n_samples,
-        beta_coef, alpha0, sigma2, rng=None
+        beta_coef, alpha0, sigma2, rng=None,
+        mean_vector=None
 ):
     """Generate dataset based on GP with a given kernel function."""
     if rng is None:
         rng = np.random.default_rng()
 
+    if mean_vector is None:
+        mean_vector = np.zeros(len(grid))
+
     beta = beta_coef(grid)
 
-    X = gp(grid, kernel_fn, n_samples, rng)
+    X = gp(grid, mean_vector, kernel_fn, n_samples, rng)
     Y = alpha0 + trapz(y=X*beta, x=grid)
+
     if sigma2 > 0.0:
         Y += np.sqrt(sigma2)*rng.standard_normal(size=n_samples)
 
@@ -257,10 +260,14 @@ def generate_gp_l2_dataset(
 
 def generate_gp_rkhs_dataset(
         grid, kernel_fn, n_samples,
-        beta, tau, alpha0, sigma2, rng=None
+        beta, tau, alpha0, sigma2, rng=None,
+        mean_vector=None
 ):
     """Generate dataset based on GP with a given kernel function."""
-    X = gp(grid, kernel_fn, n_samples, rng)
+    if mean_vector is None:
+        mean_vector = np.zeros(len(grid))
+
+    X = gp(grid, mean_vector, kernel_fn, n_samples, rng)
 
     theta_true = np.concatenate((
         beta, tau,
@@ -275,11 +282,17 @@ def generate_gp_rkhs_dataset(
 
 def generate_classification_dataset(
         grid, kernel_fn, kernel_fn2,
-        n_samples, rng=None
+        n_samples, rng=None, mean_vector=None,
+        mean_vector2=None
 ):
+    """Generate dataset based on a known distribution on X|Y."""
+    if mean_vector is None:
+        mean_vector = np.zeros(len(grid))
+    if mean_vector2 is None:
+        mean_vector2 = np.zeros(len(grid))
 
-    X1 = gp(grid, kernel_fn, n_samples//2, rng)
-    X2 = gp(grid, kernel_fn2, n_samples - n_samples//2, rng)
+    X1 = gp(grid, mean_vector, kernel_fn, n_samples//2, rng)
+    X2 = gp(grid, mean_vector2, kernel_fn2, n_samples - n_samples//2, rng)
 
     X = np.vstack((X1, X2))
     Y = (n_samples//2 <= np.arange(n_samples)).astype(int)

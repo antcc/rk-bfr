@@ -479,6 +479,9 @@ if SYNTHETIC_DATA:
     N = 100
     grid = np.linspace(1./N, 1., N)
 
+    mean_vector = None
+    mean_vector2 = np.ones(N)
+
     beta_true = np.array([-5., 10.])
     tau_true = np.array([0.1, 0.8])
     alpha0_true = -0.5
@@ -486,7 +489,8 @@ if SYNTHETIC_DATA:
     if MODEL_GEN == "MIXTURE":
         x, y = utils.generate_classification_dataset(
             grid, kernel_fn, kernel_fn2,
-            n_train + n_test, rng=rng)
+            n_train + n_test, rng,
+            mean_vector, mean_vector2)
     else:
         if MODEL_GEN == "L2":
             x, y_lin = utils.generate_gp_l2_dataset(
@@ -838,8 +842,6 @@ if FIT_REF_ALGS:
     Cs = np.logspace(-4, 4, 20)
     n_selected = [5, 10, 15, 20, 25, X.shape[1]]
     n_components = [2, 3, 4, 5, 6, 10]
-    n_basis = [3, 5, 7, 9, 11]
-    basis_fourier = [Fourier(n_basis=p) for p in n_basis]
     n_neighbors = [3, 5, 7]
 
     params_clf = {"clf__C": Cs}
@@ -847,7 +849,6 @@ if FIT_REF_ALGS:
     params_select = {"selector__p": n_selected}
     params_fpca = {"dim_red__n_components": n_components}
     params_var_sel = {"var_sel__n_features_to_select": n_components}
-    params_basis = {"basis__basis": basis_fourier}
     params_knn = {"clf__n_neighbors": n_neighbors,
                   "clf__weights": ['uniform', 'distance']}
     params_depth = {"clf__depth_method": [skfda.exploratory.depth.ModifiedBandDepth(),
