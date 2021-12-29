@@ -1,6 +1,7 @@
 # encoding: utf-8
 
 import numpy as np
+import os
 from matplotlib import pyplot as plt
 import arviz as az
 from tqdm.notebook import tqdm as tqdm_notebook
@@ -12,6 +13,19 @@ import xarray as xr
 from scipy.integrate import trapz
 from scipy.special import expit
 
+
+# Custom context manager for handling warnings
+
+class IgnoreWarnings():
+    def __enter__(self):
+        self.state = os.environ["PYTHONWARNINGS"]
+        os.environ["PYTHONWARNINGS"] = "ignore"
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        os.environ["PYTHONWARNINGS"] = self.state
+
+# Custom transformations
 
 class Identity():
 
