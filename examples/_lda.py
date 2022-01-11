@@ -78,7 +78,7 @@ class LDA(
         self,
         X: AcceptedDataType,
         y: np.ndarray,
-        sample_weight: Optional[np.ndarray] = None,
+        **kwargs,
     ) -> LDA:
         # Check parameters
         X, classes, y_ind = self._argcheck_X_y(X, y)
@@ -93,11 +93,14 @@ class LDA(
             y_new = y_ind
 
         # Fit base regressor
-        self.base_regressor.fit(X, y_new, sample_weight)
+        self.base_regressor.fit(X, y_new, **kwargs)
 
         # Save attributes
         self.coef_ = self.base_regressor.coef_
-        self.intercept_ = self.base_regressor.intercept_
+        if hasattr(self.base_regressor, "intercept_"):
+            self.intercept_ = self.base_regressor.intercept_
+        else:
+            self.intercept_ = 0.0
         self.classes_ = classes
 
         # Set threshold
