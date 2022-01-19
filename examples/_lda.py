@@ -87,8 +87,8 @@ class LDA(
         if self.encode_y:
             p0 = np.mean(y_ind == 0)
             p1 = 1 - p0
-            y_new = [np.sqrt(p1/p0) if yy == 0 else -np.sqrt(p0/p1)
-                     for yy in y_ind]
+            y_new = np.array([np.sqrt(p1/p0) if yy == 0 else -np.sqrt(p0/p1)
+                              for yy in y_ind])
         else:
             y_new = y_ind
 

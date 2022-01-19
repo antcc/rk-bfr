@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -13,8 +11,6 @@ from skfda.representation.basis import Basis
 from skfda.representation import FData
 from skfda.representation.grid import FDataGrid
 from skfda.representation.basis import FDataBasis
-from skfda._utils import _to_domain_range
-from skfda.representation._typing import DomainRangeLike
 
 
 class KarhunenLoeve(Basis):
@@ -24,15 +20,13 @@ class KarhunenLoeve(Basis):
         self,
         X: FData,
         *,
-        n_basis: int = 3,
+        n_basis: int = 2,
     ) -> None:
         """
         Construct a KarhunenLoeve object.
 
         Args:
             X: Functional data from which to construct the basis.
-            domain_range: Tuple defining the domain over which the
-                function is defined.
             n_basis: Number of basis functions.
         """
         self.basis = None
@@ -74,8 +68,11 @@ class KarhunenLoeve(Basis):
             return self.basis.evaluate(eval_points)
 
 
-class FPCABasis(BaseEstimator, TransformerMixin):
-    def __init__(self, n_basis: int = 3) -> None:
+class FPCABasis(
+    BaseEstimator,  # type: ignore
+    TransformerMixin,  # type: ignore
+):
+    def __init__(self, n_basis: int = 2) -> None:
         self.n_basis = n_basis
 
     def fit(self, X: FData, y: None = None) -> FPCABasis:
