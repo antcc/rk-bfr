@@ -144,7 +144,7 @@ class APLS(
         # Orthonormalize {K^i(b)} to obtain an FPLS basis
         self.basis_ = _modified_gram_schmidt(Kb_iterations, K, grid)
 
-        # Compute the coordinates of each X_i with respect to the FPLS basis
+        # Compute the coordinates of each sample with respect to the FPLS basis
         coord_matrix = simpson(data[:, None]*self.basis_[None, :], x=grid)
 
         # Obtain coefficients by solving a least squares problem

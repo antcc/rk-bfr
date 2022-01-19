@@ -5,6 +5,7 @@ __pycache__
 # Ignore temp files
 _*.md
 _*.txt
+*TEMP*
 
 # Ignore results files
 *.results
