@@ -1,36 +1,57 @@
 # encoding: utf-8
 
-import numpy as np
-import pandas as pd
-import warnings
-import sys
 import os
 import logging
-from itertools import product
+import sys
 import time
-import scipy
 from multiprocessing import Pool
+from itertools import product
 
-import skfda
-from skfda.preprocessing.dim_reduction.feature_extraction import FPCA
-from skfda.ml.regression import LinearRegression as FLinearRegression
-from skfda.ml.regression import KNeighborsRegressor
-from skfda.representation.basis import FDataBasis, Fourier, BSpline
-from skfda.representation.grid import FDataGrid
+import numpy as np
+import pandas as pd
+import scipy
+import emcee
 
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.linear_model import Ridge, Lasso, LinearRegression
 from sklearn.svm import SVR
+from sklearn.linear_model import Ridge, Lasso
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
+from sklearn.decomposition import PCA
+from sklearn.cross_decomposition import PLSRegression
+from sklearn.utils.validation import check_is_fitted
+from sklearn.model_selection import train_test_split, GridSearchCV
 
 import utils
+from _fpls import FPLS, APLS, FPLSBasis
+# from _fpca_basis import FPCABasis
 
-import emcee
+import skfda
+from skfda.preprocessing.dim_reduction.variable_selection import (
+    RecursiveMaximaHunting as RMH,
+    # MinimumRedundancyMaximumRelevance as mRMR,
+)
+from skfda.preprocessing.dim_reduction.feature_extraction import FPCA
+from skfda.ml.regression import KNeighborsRegressor
+from skfda.ml.regression import LinearRegression as FLinearRegression
+from skfda.representation.basis import FDataBasis, Fourier, BSpline
+from skfda.representation.grid import FDataGrid
+from skfda.preprocessing.smoothing import BasisSmoother
+from skfda.preprocessing.smoothing.validation import (
+    SmoothingParameterSearch,
+    LinearSmootherGeneralizedCVScorer,
+    akaike_information_criterion
+)
+from skfda.preprocessing.smoothing.kernel_smoothers import (
+    NadarayaWatsonSmoother as NW
+)
+
+###################################################################
+# CONFIGURATION
+###################################################################
 
 # Ignore warnings
-os.environ["PYTHONWARNINGS"] = 'ignore::UserWarning'
+os.environ["PYTHONWARNINGS"] = 'ignore'
 np.seterr(over='ignore', divide='ignore')
 
 # Floating point precision for display
@@ -52,17 +73,21 @@ N_CORES = os.cpu_count()
 
 # Data
 SYNTHETIC_DATA = True
-MODEL_GEN = "RKHS"  # 'L2' or 'RKHS
-REAL_DATA = "Tecator"
+MODEL_GEN = "RKHS"  # 'L2' or 'RKHS'
+REAL_DATA = "Aemet"
+
+INITIAL_SMOOTHING = "NW"  # None, 'NW' or 'Basis'
+N_BASIS = 16
 STANDARDIZE_PREDICTORS = False
 STANDARDIZE_RESPONSE = False
-BASIS_REPRESENTATION = True
-N_BASIS = 11
 TRANSFORM_TAU = False
 
 kernel_fn = utils.fractional_brownian_kernel
 beta_coef = utils.cholaquidis_scenario3
-basis = Fourier(n_basis=N_BASIS)
+
+basis = BSpline(n_basis=N_BASIS)
+smoothing_params = np.logspace(-4, 4, 50)
+
 folds = KFold(shuffle=True, random_state=SEED)
 
 # Results
@@ -138,12 +163,12 @@ def neg_ll(theta_tr, X, Y, theta_space):
              - np.linalg.norm(Y - alpha0 - X_tau@beta)**2/(2*sigma2))
 
 
-def optimizer_global(rng, args):
+def optimizer_global(random_state, args):
     theta_init, X, Y, theta_space, method, bounds = args
     return scipy.optimize.basinhopping(
         neg_ll,
         x0=theta_init,
-        seed=rng,
+        seed=random_state,
         minimizer_kwargs={"args": (X, Y, theta_space),
                           "method": method,
                           "bounds": bounds}
@@ -155,6 +180,9 @@ def compute_mle(
         method='Powell',
         strategy='global',
         rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+
     p = theta_space.p
 
     theta_init = theta_space.forward(
@@ -168,9 +196,7 @@ def compute_mle(
                   + [(None, None)]
                   + [(None, None)])
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-
+    with utils.IgnoreWarnings():
         if strategy == 'local':
             mle_theta = scipy.optimize.minimize(
                 neg_ll,
@@ -184,11 +210,10 @@ def compute_mle(
             mles = np.zeros((N_CORES, theta_space.ndim))
 
             with Pool(N_CORES) as pool:
-                rngs = [np.random.default_rng(SEED + i)
-                        for i in range(N_CORES)]
+                random_states = [rng.integers(2**32) for i in range(N_CORES)]
                 args_optim = [theta_init, X, Y, theta_space, method, bounds]
                 mles = pool.starmap(
-                    optimizer_global, product(rngs, [args_optim]))
+                    optimizer_global, product(random_states, [args_optim]))
                 bics = utils.bic = utils.compute_bic(
                     theta_space, neg_ll, mles, X, Y)
                 mle_theta = mles[np.argmin(bics)]
@@ -317,7 +342,10 @@ def cv_sk(regressors, folds, X, Y, X_test, Y_test, columns_name, verbose=False):
             print(f"  Fitting {name}...")
         reg_cv = GridSearchCV(pipe, params, scoring="neg_mean_squared_error",
                               n_jobs=N_CORES, cv=folds)
-        reg_cv.fit(X, Y)
+
+        with utils.IgnoreWarnings():
+            reg_cv.fit(X, Y)
+
         Y_hat_sk = reg_cv.predict(X_test)
         metrics_sk = utils.regression_metrics(Y_test, Y_hat_sk)
 
@@ -325,6 +353,8 @@ def cv_sk(regressors, folds, X, Y, X_test, Y_test, columns_name, verbose=False):
             n_features = f"K={reg_cv.best_params_['reg__n_neighbors']}"
         elif "svm" in name:
             n_features = reg_cv.best_estimator_["reg"].n_features_in_
+        elif "pls1" in name:
+            n_features = reg_cv.best_estimator_["reg"].n_components
         else:
             if isinstance(reg_cv.best_estimator_["reg"].coef_[0], FDataBasis):
                 coef = reg_cv.best_estimator_["reg"].coef_[0].coefficients[0]
@@ -342,7 +372,7 @@ def cv_sk(regressors, folds, X, Y, X_test, Y_test, columns_name, verbose=False):
 
     df_metrics_sk.sort_values(columns_name[-2], inplace=True)
 
-    return df_metrics_sk
+    return df_metrics_sk, reg_cv
 
 
 class FeatureSelector(BaseEstimator, TransformerMixin):
@@ -395,6 +425,25 @@ class VariableSelection(BaseEstimator, TransformerMixin):
         return FDataGrid(X.data_matrix[:, self.idx], self.grid[self.idx])
 
 
+class PLSRegressionWrapper(PLSRegression):
+
+    def transform(self, X, y=None):
+        check_is_fitted(self)
+
+        return super().transform(X)
+
+    def fit_transform(self, X, y):
+        return self.fit(X, y).transform(X)
+
+    def predict(self, X, copy=True):
+        check_is_fitted(self)
+
+        if self.coef_.shape[1] == 1:  # if n_targets == 1
+            return super().predict(X, copy)[:, 0]
+        else:
+            return super().predict(X, copy)
+
+
 # -- Bayesian variable selection
 
 def bayesian_var_sel(idata, theta_space, names,
@@ -439,8 +488,9 @@ def bayesian_var_sel(idata, theta_space, names,
                                params_svm
                                ))
 
-    df_metrics_var_sel = cv_sk(regressors_var_sel, folds, X, Y,
-                               X_test, Y_test, columns_name, verbose)
+    df_metrics_var_sel, reg_cv_var_sel = cv_sk(
+        regressors_var_sel, folds, X, Y,
+        X_test, Y_test, columns_name, verbose)
 
     return df_metrics_var_sel
 
@@ -469,6 +519,11 @@ def iteration_count(total, current):
 # GENERATE DATASET
 ###################################################################
 
+print(f"Random seed: {SEED}")
+print(f"Num. cores: {N_CORES}")
+
+# -- Dataset generation
+
 if SYNTHETIC_DATA:
     n_train, n_test = 100, 50
     N = 100
@@ -492,8 +547,7 @@ if SYNTHETIC_DATA:
             alpha0_true, sigma2_true, rng=rng
         )
     else:
-        raise ValueError(
-            f"Model generation must be 'L2' or 'RKHS', but got {MODEL_GEN}")
+        raise ValueError("Invalid model generation strategy.")
 
     # Train/test split
     X, X_test, Y, Y_test = train_test_split(
@@ -524,14 +578,34 @@ else:
     grid = np.linspace(1./N, 1., N)  # TODO: use (normalized) real grid
     n_train, n_test = len(X_fd.data_matrix), len(X_test_fd.data_matrix)
 
-if BASIS_REPRESENTATION:
-    X_fd = X_fd.to_basis(basis).to_grid(X_fd.grid_points[0])
-    X_test_fd = X_test_fd.to_basis(basis).to_grid(X_fd.grid_points[0])
+if INITIAL_SMOOTHING is not None:
+    print("\nSmoothing data...")
+    if INITIAL_SMOOTHING == "NW":
+        smoother = NW()
+    elif INITIAL_SMOOTHING == "Basis":
+        smoother = BasisSmoother(basis)
+    else:
+        raise ValueError(
+            f"Expected 'NW' or 'Basis' but got {INITIAL_SMOOTHING}.")
+
+    best_smoother = SmoothingParameterSearch(
+        smoother,
+        smoothing_params,
+        scoring=LinearSmootherGeneralizedCVScorer(
+            akaike_information_criterion),
+        n_jobs=-1,
+    )
+
+    with utils.IgnoreWarnings():
+        best_smoother.fit(X_fd)
+
+    X_fd = best_smoother.transform(X_fd)
+    X_test_fd = best_smoother.transform(X_test_fd)
 
 if STANDARDIZE_PREDICTORS:
-    X_sd = X_fd.data_matrix.std(axis=0)
+    X_sd = np.sqrt(X_fd.var())
 else:
-    X_sd = np.ones(X_fd.data_matrix.shape[1:])
+    X_sd = 1.0
 
 if STANDARDIZE_RESPONSE:
     Y_m = Y.mean()
@@ -548,6 +622,9 @@ X_test_fd = (X_test_fd - X_m)/X_sd
 X_test = X_test_fd.data_matrix.reshape(-1, N)
 Y = (Y - Y_m)/Y_sd
 Y_test = (Y_test - Y_m)/Y_sd
+
+utils.plot_dataset(
+    X, Y, n_samples=n_train if not SYNTHETIC_DATA else n_train//2)
 
 # Mean of response variable
 mean_alpha0_init = Y.mean()
@@ -580,9 +657,6 @@ num_estimates = len(all_estimates)
 ###################################################################
 # RUN SAMPLER
 ###################################################################
-
-print(f"Random seed: {SEED}")
-print(f"Num. cores: {N_CORES}")
 
 mean_acceptance = np.zeros((N_REPS, num_ps, num_gs, num_etas))
 mse = np.zeros((N_REPS, num_ps, num_gs, num_etas, num_estimates))
@@ -666,8 +740,10 @@ try:
                         state = sampler.run_mcmc(
                             p0, n_iter_initial, progress=False, store=False)
                         sampler.reset()
-                        sampler.run_mcmc(state, n_iter, progress=PRINT_RESULTS_ONLINE,
-                                         progress_kwargs={"desc": f"({it}/{total_models})"})
+                        sampler.run_mcmc(
+                            state, n_iter,
+                            progress=PRINT_RESULTS_ONLINE,
+                            progress_kwargs={"desc": f"({it}/{total_models})"})
 
                     # -- Get InferenceData object
 
@@ -691,7 +767,8 @@ try:
 
                     # Posterior mean estimate
                     pp_test = utils.generate_pp(
-                        idata, X_test, theta_names, thin_pp, rng=rng, progress=False)
+                        idata, X_test, theta_names,
+                        thin_pp, rng=rng, progress=False)
                     Y_hat_pp = pp_test.mean(axis=(0, 1))
                     metrics_pp = utils.regression_metrics(Y_test, Y_hat_pp)
                     mse[rep, i, j, k, 0] = metrics_pp["mse"]
@@ -712,8 +789,8 @@ try:
                         min_pe = np.argmin(mse[rep, i, j, k, :])
                         min_mse = mse[rep, i, j, k, min_pe]
                         print(
-                            f"  [p={p}, g={g}, η={eta}]: Min MSE = {min_mse:.3f} "
-                            f"with '{all_estimates[min_pe]}'")
+                            f"  [p={p}, g={g}, η={eta}]: Min MSE = {min_mse:.3f}"
+                            f" with '{all_estimates[min_pe]}'")
 
         if not PRINT_RESULTS_ONLINE:
             print("")
@@ -836,21 +913,32 @@ if FIT_REF_ALGS:
 
     alphas = np.logspace(-4, 4, 20)
     n_selected = [5, 10, 15, 20, 25, X.shape[1]]
-    n_components = [2, 3, 4, 5, 6, 10]
+    n_components = [2, 3, 4, 5, 10]
     n_basis_bsplines = [8, 10, 12, 14, 16]
     n_basis_fourier = [3, 5, 7, 9, 11]
+    n_neighbors = [3, 5, 7]
+
     basis_bspline = [BSpline(n_basis=p) for p in n_basis_bsplines]
     basis_fourier = [Fourier(n_basis=p) for p in n_basis_fourier]
-    n_neighbors = [3, 5, 7]
+    basis_fpls = [FPLSBasis(X_fd, Y, n_basis=p) for p in n_components]
 
     params_reg = {"reg__alpha": alphas}
     params_svm = {"reg__C": alphas,
                   "reg__gamma": ['auto', 'scale']}
     params_select = {"selector__p": n_selected}
-    params_fpca = {"dim_red__n_components": n_components}
-    params_basis = {"basis__basis": basis_fourier + basis_bspline}
+    params_pls = {"reg__n_components": n_components}
+    params_dim_red = {"dim_red__n_components": n_components}
+    params_basis = {"basis__basis": basis_bspline + basis_fourier}
+    params_basis_fpca = {"basis__n_basis": n_components}
+    params_basis_fpls = {"basis__basis": basis_fpls}
     params_knn = {"reg__n_neighbors": n_neighbors,
                   "reg__weights": ['uniform', 'distance']}
+    params_mrmr = {"var_sel__method": ["MID", "MIQ"],
+                   "var_sel__n_features_to_select": n_components}
+
+    """
+    MULTIVARIATE MODELS
+    """
 
     # Lasso
     regressors.append(("sk_lasso",
@@ -859,6 +947,18 @@ if FIT_REF_ALGS:
                            ("reg", Lasso())]),
                        params_reg
                        ))
+
+    # PLS1 regression
+    regressors.append(("sk_pls1",
+                       Pipeline([
+                           ("data_matrix", DataMatrix()),
+                           ("reg", PLSRegressionWrapper())]),
+                       params_pls
+                       ))
+
+    """
+    VARIABLE SELECTION + MULTIVARIATE MODELS
+    """
 
     # Manual+Ridge
     regressors.append(("manual_sel+sk_ridge",
@@ -869,29 +969,65 @@ if FIT_REF_ALGS:
                        {**params_reg, **params_select}
                        ))
 
-    # FPCA+Lin
-    regressors.append(("fpca+sk_lin",
-                       Pipeline([
-                           ("dim_red", FPCA()),  # Retains scores only
-                           ("reg", LinearRegression())]),
-                       params_fpca
-                       ))
-
     # FPCA+Ridge
     regressors.append(("fpca+sk_ridge",
                        Pipeline([
                            ("dim_red", FPCA()),  # Retains scores only
                            ("reg", Ridge())]),
-                       {**params_fpca, **params_reg}
+                       {**params_dim_red, **params_reg}
                        ))
 
-    # FPCA+SVM RBF
-    regressors.append(("fpca+sk_svm_rbf",
+    """
+    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
+
+    # FPLS (fixed basis)+Ridge
+    regressors.append(("fpls_basis+sk_ridge",
                        Pipeline([
-                           ("dim_red", FPCA()),  # Retains scores only
-                           ("reg", SVR(kernel='rbf'))]),
-                       {**params_fpca, **params_svm}
+                           ("basis", Basis()),
+                           ("dim_red", FPLS()),
+                           ("reg", Ridge())]),
+                       {**params_basis, **params_dim_red, **params_reg}
                        ))
+
+    """
+
+    # PCA+Ridge
+    regressors.append(("pca+sk_ridge",
+                       Pipeline([
+                           ("data_matrix", DataMatrix()),
+                           ("dim_red", PCA(random_state=SEED)),
+                           ("reg", Ridge())]),
+                       {**params_dim_red, **params_reg}
+                       ))
+
+    # PLS+Ridge
+    regressors.append(("pls+sk_ridge",
+                       Pipeline([
+                           ("data_matrix", DataMatrix()),
+                           ("dim_red", PLSRegressionWrapper()),
+                           ("reg", Ridge())]),
+                       {**params_dim_red, **params_reg}
+                       ))
+
+    # RMH+Ridge
+    regressors.append(("rmh+sk_ridge",
+                       Pipeline([
+                           ("var_sel", RMH()),
+                           ("reg", Ridge())]),
+                       params_reg
+                       ))
+
+    """
+    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
+
+    # mRMR+Ridge
+    regressors.append(("mRMR+sk_ridge",
+                       Pipeline([
+                           ("var_sel", mRMR()),
+                           ("reg", Ridge())]),
+                       {**params_mrmr, **params_reg}
+                       ))
+    """
 
     # Manual+SVM RBF
     regressors.append(("manual_sel+sk_svm_rbf",
@@ -902,12 +1038,117 @@ if FIT_REF_ALGS:
                        {**params_select, **params_svm}
                        ))
 
-    # Functional Linear Regression
-    regressors.append(("sk_flin",
+    # FPCA+SVM RBF
+    regressors.append(("fpca+sk_svm_rbf",
+                       Pipeline([
+                           ("dim_red", FPCA()),  # Retains scores only
+                           ("reg", SVR(kernel='rbf'))]),
+                       {**params_dim_red, **params_svm}
+                       ))
+
+    """
+    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
+
+    # FPLS (fixed basis)+SMV RBF
+    regressors.append(("fpls_basis+sk_svm_rbf",
+                       Pipeline([
+                           ("basis", Basis()),
+                           ("dim_red", FPLS()),
+                           ("reg", SVR(kernel='rbf'))]),
+                       {**params_basis, **params_dim_red, **params_svm}
+                       ))
+    """
+
+    # PCA+SVM RBF
+    regressors.append(("pca+sk_svm_rbf",
+                       Pipeline([
+                           ("data_matrix", DataMatrix()),
+                           ("dim_red", PCA(random_state=SEED)),
+                           ("reg", SVR(kernel='rbf'))]),
+                       {**params_dim_red, **params_svm}
+                       ))
+
+    # PLS+SMV RBF
+    regressors.append(("pls+sk_svm_rbf",
+                       Pipeline([
+                           ("data_matrix", DataMatrix()),
+                           ("dim_red", PLSRegressionWrapper()),
+                           ("reg", SVR(kernel='rbf'))]),
+                       {**params_dim_red, **params_svm}
+                       ))
+
+    # RMH+SVM RBF
+    regressors.append(("rmh+sk_svm_rbf",
+                       Pipeline([
+                           ("var_sel", RMH()),
+                           ("reg", SVR(kernel='rbf'))]),
+                       params_svm
+                       ))
+
+    """
+    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
+
+    # mRMR+SVM RBF
+    regressors.append(("mRMR+sk_svm_rbf",
+                       Pipeline([
+                           ("var_sel", mRMR()),
+                           ("reg", SVR(kernel='rbf'))]),
+                       {**params_mrmr, **params_svm}
+                       ))
+    """
+
+    """
+    FUNCTIONAL MODELS
+    """
+
+    regressors.append(("sk_apls",
+                       Pipeline([
+                           ("reg", APLS())]),
+                       params_pls
+                       ))
+
+    # NOTE: while not strictly necessary, the test data undergoes the
+    # same basis expansion process as the training data. This is more
+    # computationally efficient and seems to improve the performance.
+
+    # Fixed basis + Functional Linear Regression
+    regressors.append(("sk_flin_basis",
                        Pipeline([
                            ("basis", Basis()),
                            ("reg", FLinearRegression())]),
                        params_basis
+                       ))
+
+    """
+    TARDA BASTANTE (cálculo de Gram matrix costoso en la base)
+
+    # FPCA basis + Functional Linear Regression
+    regressors.append(("sk_flin_khl",
+                       Pipeline([
+                           ("basis", FPCABasis()),
+                           ("reg", FLinearRegression())]),
+                       params_basis_fpca
+                       ))
+    """
+
+    """
+    TARDA BASTANTE (cálculo de Gram matrix costoso en la base)
+
+    # FPLS basis + Functional Linear Regression
+    regressors.append(("sk_flin_fpls",
+                       Pipeline([
+                           ("basis", Basis()),
+                           ("reg", FLinearRegression())]),
+                       params_basis_fpls
+                       ))
+    """
+
+    # Fixed basis + FPLS1 regression
+    regressors.append(("sk_fpls1_basis",
+                       Pipeline([
+                           ("basis", Basis()),
+                           ("reg", FPLS())]),
+                       {**params_basis, **params_pls}
                        ))
 
     # KNeighbors Functional Regression
@@ -920,8 +1161,8 @@ if FIT_REF_ALGS:
     # -- Fit model and save metrics
 
     print("Fitting reference sklearn models...")
-    df_metrics_sk = cv_sk(regressors, folds, X_fd, Y, X_test_fd,
-                          Y_test, results_columns_ref, verbose=True)
+    df_metrics_sk, reg_cv = cv_sk(regressors, folds, X_fd, Y, X_test_fd,
+                                  Y_test, results_columns_ref, verbose=True)
 
 ###################################################################
 # PRINT RESULTS
@@ -934,8 +1175,14 @@ if SYNTHETIC_DATA:
 else:
     data_name = REAL_DATA
 
-filename = ("emcee_" + data_name + "_basis_"
-            + (basis.__class__.__name__ if BASIS_REPRESENTATION else "None")
+if INITIAL_SMOOTHING == "NW":
+    smoothing_str = best_smoother.best_estimator_.__class__.__name__
+elif INITIAL_SMOOTHING == "Basis":
+    smoothing_str = basis.__class__.__name__
+else:
+    smoothing_str = "none"
+
+filename = ("emcee_" + data_name + "_smoothing_" + smoothing_str
             + "_frac_random_" + str(int(100*frac_random)) + "_walkers_"
             + str(n_walkers) + "_iters_" + str(n_iter) + "_reps_"
             + str(rep + 1) + "_seed_" + str(SEED))
@@ -954,10 +1201,14 @@ if STANDARDIZE_PREDICTORS:
     print("Standardized predictors")
 if STANDARDIZE_RESPONSE:
     print("Standardized response")
-if BASIS_REPRESENTATION:
-    print(f"Basis: {basis.__class__.__name__}(n={N_BASIS})")
+if INITIAL_SMOOTHING == "NW":
+    print(
+        f"Smoothing: {best_smoother.best_estimator_.__class__.__name__}"
+        f"(λ={best_smoother.best_params_['smoothing_parameter']:.3f})")
+elif INITIAL_SMOOTHING == "Basis":
+    print(f"Smoothing: {basis.__class__.__name__}(n=N_BASIS)")
 else:
-    print("Basis: None")
+    print("Smoothing: none")
 print(f"Transform tau: {'true' if TRANSFORM_TAU else 'false'}")
 
 if SYNTHETIC_DATA:

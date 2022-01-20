@@ -25,6 +25,7 @@ class IgnoreWarnings():
     def __exit__(self, exc_type, exc_value, exc_tb):
         os.environ["PYTHONWARNINGS"] = self.state
 
+
 # Custom transformations
 
 class Identity():
