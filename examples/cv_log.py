@@ -83,26 +83,44 @@ MODEL_GEN = "RKHS"  # 'L2', 'RKHS' or 'MIXTURE'
 REAL_DATA = "Medflies"
 NOISE = 0.10
 
-INITIAL_SMOOTHING = "NW"  # 'NW' or 'Basis'
-N_BASIS = 16
-STANDARDIZE_PREDICTORS = False
-TRANSFORM_TAU = False
-
 kernel_fn = utils.fractional_brownian_kernel
 kernel_fn2 = utils.squared_exponential_kernel
 beta_coef = utils.cholaquidis_scenario3
+
+INITIAL_SMOOTHING = "NW"  # None, 'NW' or 'Basis'
+N_BASIS = 16
+STANDARDIZE_PREDICTORS = False
+TRANSFORM_TAU = False
 
 basis = BSpline(n_basis=N_BASIS)
 smoothing_params = np.logspace(-4, 4, 50)
 
 folds = StratifiedKFold(shuffle=True, random_state=SEED)
 
+# Override options with command-line parameters
+if len(sys.argv) > 2:
+    if SYNTHETIC_DATA:
+        MODEL_GEN = sys.argv[2]
+    else:
+        REAL_DATA = sys.argv[2]
+    if sys.argv[3] == "1":
+        kernel_fn = utils.fractional_brownian_kernel
+    elif sys.argv[3] == "2":
+        kernel_fn = utils.ornstein_uhlenbeck_kernel
+    else:
+        kernel_fn = utils.squared_exponential_kernel
+    if sys.argv[4] == "NW" or sys.argv[4] == "Basis":
+        INITIAL_SMOOTHING = sys.argv[4]
+    else:
+        INITIAL_SMOOTHING = None
+
 # Results
 FIT_REF_ALGS = True
 REFIT_BEST_VAR_SEL = True
 PRINT_RESULTS_ONLINE = False
 PRINT_TO_FILE = False
-SAVE_RESULTS = False
+SAVE_RESULTS = True
+SAVE_TOP = 10
 
 ###################################################################
 # HYPERPARAMETERS
@@ -110,14 +128,14 @@ SAVE_RESULTS = False
 
 # -- Cv and Model parameters
 
-N_REPS = 2
+N_REPS = 5
 
 mle_method = 'L-BFGS-B'
 mle_strategy = 'global'
 
-ps = [2, 3]
+ps = [2, 3, 4]
 gs = [5]
-etas = [0.01]
+etas = [0.01, 0.1, 1.0, 10.0]
 num_ps = len(ps)
 num_gs = len(gs)
 num_etas = len(etas)
@@ -590,7 +608,7 @@ else:
     n_train, n_test = len(X_fd.data_matrix), len(X_test_fd.data_matrix)
 
 if INITIAL_SMOOTHING is not None:
-    print("\nSmoothing data...")
+    print("\nSmoothing data...", end="")
     if INITIAL_SMOOTHING == "NW":
         smoother = NW()
     elif INITIAL_SMOOTHING == "Basis":
@@ -612,6 +630,7 @@ if INITIAL_SMOOTHING is not None:
 
     X_fd = best_smoother.transform(X_fd)
     X_test_fd = best_smoother.transform(X_test_fd)
+    print("done")
 
 if STANDARDIZE_PREDICTORS:
     X_sd = np.sqrt(X_fd.var())
@@ -906,6 +925,8 @@ if REFIT_BEST_VAR_SEL and rep + 1 > 0:
 ###################################################################
 # FIT SKLEARN MODELS
 ###################################################################
+
+df_metrics_sk = pd.DataFrame(columns=results_columns_ref)
 
 if FIT_REF_ALGS:
 
@@ -1394,7 +1415,7 @@ elif INITIAL_SMOOTHING == "Basis":
 else:
     smoothing_str = "none"
 
-filename = ("emcee_" + data_name + "_noise_" + str(int(100*NOISE))
+filename = ("clf_" + "emcee_" + data_name + "_noise_" + str(int(100*NOISE))
             + "_smoothing_" + smoothing_str + "_frac_random_"
             + str(int(100*frac_random)) + "_walkers_"
             + str(n_walkers) + "_iters_" + str(n_iter) + "_reps_"
@@ -1467,7 +1488,7 @@ if rep + 1 > 0:
     print(df_metrics_emcee.to_string(index=False, col_space=6))
 
     if REFIT_BEST_VAR_SEL:
-        print("\n-- RESULTS BAYESIAN VARIABLE SELECTION --\n")
+        print("\n-- RESULTS BAYESIAN VARIABLE SELECTION --")
         i, j, k = max_acc_params
         p, g, eta = ps[i], gs[j], etas[k]
         print(f"Base model: p={p}, g={g}, η={eta}\n")
@@ -1482,8 +1503,23 @@ if FIT_REF_ALGS:
 ###################################################################
 
 if SAVE_RESULTS and rep + 1 > 0:
+    # Save all the results dataframe in one CSV file
+    df = pd.concat(
+        [df_metrics_emcee, df_metrics_var_sel, df_metrics_sk],
+        axis=0,
+        ignore_index=True)
+    df.to_csv(filename + ".csv", index=False)
+
+    # Save the top Accuracy values to arrays
+    emcee_best = df_metrics_emcee["Accuracy"][:SAVE_TOP].apply(
+        lambda s: s.split("±")[0]).to_numpy(dtype=float)
+    var_sel_best = df_metrics_var_sel["Accuracy"][:SAVE_TOP].to_numpy(
+        dtype=float)
+    sk_best = df_metrics_sk["Accuracy"][:SAVE_TOP].to_numpy(dtype=float)
+
     np.savez(
         filename + ".npz",
-        mean_acceptance=mean_acceptance[:rep + 1, ...],
-        acc=acc[:rep + 1, ...]
+        emcee_best=emcee_best,
+        var_sel_best=var_sel_best,
+        sk_best=sk_best,
     )

@@ -76,26 +76,44 @@ SYNTHETIC_DATA = True
 MODEL_GEN = "RKHS"  # 'L2' or 'RKHS'
 REAL_DATA = "Aemet"
 
+kernel_fn = utils.fractional_brownian_kernel
+beta_coef = utils.cholaquidis_scenario3
+
 INITIAL_SMOOTHING = "NW"  # None, 'NW' or 'Basis'
 N_BASIS = 16
 STANDARDIZE_PREDICTORS = False
 STANDARDIZE_RESPONSE = False
 TRANSFORM_TAU = False
 
-kernel_fn = utils.fractional_brownian_kernel
-beta_coef = utils.cholaquidis_scenario3
-
 basis = BSpline(n_basis=N_BASIS)
 smoothing_params = np.logspace(-4, 4, 50)
 
 folds = KFold(shuffle=True, random_state=SEED)
+
+# Override options with command-line parameters
+if len(sys.argv) > 2:
+    if SYNTHETIC_DATA:
+        MODEL_GEN = sys.argv[2]
+    else:
+        REAL_DATA = sys.argv[2]
+    if sys.argv[3] == "1":
+        kernel_fn = utils.fractional_brownian_kernel
+    elif sys.argv[3] == "2":
+        kernel_fn = utils.ornstein_uhlenbeck_kernel
+    else:
+        kernel_fn = utils.squared_exponential_kernel
+    if sys.argv[4] == "NW" or sys.argv[4] == "Basis":
+        INITIAL_SMOOTHING = sys.argv[4]
+    else:
+        INITIAL_SMOOTHING = None
 
 # Results
 FIT_REF_ALGS = True
 REFIT_BEST_VAR_SEL = True
 PRINT_RESULTS_ONLINE = False
 PRINT_TO_FILE = False
-SAVE_RESULTS = False
+SAVE_RESULTS = True
+SAVE_TOP = 10
 
 ###################################################################
 # HYPERPARAMETERS
@@ -370,7 +388,7 @@ def cv_sk(regressors, folds, X, Y, X_test, Y_test, columns_name, verbose=False):
             metrics_sk["rmse"],
             metrics_sk["r2"]]
 
-    df_metrics_sk.sort_values(columns_name[-2], inplace=True)
+    df_metrics_sk.sort_values(columns_name[-3], inplace=True)
 
     return df_metrics_sk, reg_cv
 
@@ -579,7 +597,7 @@ else:
     n_train, n_test = len(X_fd.data_matrix), len(X_test_fd.data_matrix)
 
 if INITIAL_SMOOTHING is not None:
-    print("\nSmoothing data...")
+    print("\nSmoothing data...", end="")
     if INITIAL_SMOOTHING == "NW":
         smoother = NW()
     elif INITIAL_SMOOTHING == "Basis":
@@ -601,6 +619,7 @@ if INITIAL_SMOOTHING is not None:
 
     X_fd = best_smoother.transform(X_fd)
     X_test_fd = best_smoother.transform(X_test_fd)
+    print("done")
 
 if STANDARDIZE_PREDICTORS:
     X_sd = np.sqrt(X_fd.var())
@@ -836,8 +855,8 @@ if rep + 1 > 0:
                         f"±{r2[:rep + 1, i, j, k, m].std():.3f}"
                     ]
 
-df_metrics_mle.sort_values(results_columns_ref[-2], inplace=True)
-df_metrics_emcee.sort_values(results_columns_emcee[-2], inplace=True)
+df_metrics_mle.sort_values(results_columns_ref[-3], inplace=True)
+df_metrics_emcee.sort_values(results_columns_emcee[-3], inplace=True)
 
 ###################################################################
 # BAYESIAN VARIABLE SELECTION ON BEST MODEL
@@ -899,7 +918,7 @@ if REFIT_BEST_VAR_SEL and rep + 1 > 0:
                 Y, X_test_fd, Y_test, folds, results_columns_ref,
                 prefix="emcee", point_est=pe))
 
-    df_metrics_var_sel.sort_values(results_columns_ref[-2], inplace=True)
+    df_metrics_var_sel.sort_values(results_columns_ref[-3], inplace=True)
 
 ###################################################################
 # FIT SKLEARN MODELS
@@ -1182,7 +1201,7 @@ elif INITIAL_SMOOTHING == "Basis":
 else:
     smoothing_str = "none"
 
-filename = ("emcee_" + data_name + "_smoothing_" + smoothing_str
+filename = ("reg_" + "emcee_" + data_name + "_smoothing_" + smoothing_str
             + "_frac_random_" + str(int(100*frac_random)) + "_walkers_"
             + str(n_walkers) + "_iters_" + str(n_iter) + "_reps_"
             + str(rep + 1) + "_seed_" + str(SEED))
@@ -1251,7 +1270,7 @@ if rep + 1 > 0:
     print(df_metrics_emcee.to_string(index=False, col_space=6))
 
     if REFIT_BEST_VAR_SEL:
-        print("\n-- RESULTS BAYESIAN VARIABLE SELECTION --\n")
+        print("\n-- RESULTS BAYESIAN VARIABLE SELECTION --")
         i, j, k = min_mse_params
         p, g, eta = ps[i], gs[j], etas[k]
         print(f"Base model: p={p}, g={g}, η={eta}\n")
@@ -1266,10 +1285,22 @@ if FIT_REF_ALGS:
 ###################################################################
 
 if SAVE_RESULTS and rep + 1 > 0:
+    # Save all the results dataframe in one CSV file
+    df = pd.concat(
+        [df_metrics_emcee, df_metrics_var_sel, df_metrics_sk],
+        axis=0,
+        ignore_index=True)
+    df.to_csv(filename + ".csv", index=False)
+
+    # Save the top MSE values to arrays
+    emcee_best = df_metrics_emcee["MSE"][:SAVE_TOP].apply(
+        lambda s: s.split("±")[0]).to_numpy(dtype=float)
+    var_sel_best = df_metrics_var_sel["MSE"][:SAVE_TOP]
+    sk_best = df_metrics_sk["MSE"][:SAVE_TOP]
+
     np.savez(
         filename + ".npz",
-        mean_acceptance=mean_acceptance[:rep + 1, ...],
-        mse=mse[:rep + 1, ...],
-        rmse=rmse[:rep + 1, ...],
-        r2=r2[:rep + 1, ...]
+        emcee_best=emcee_best,
+        var_sel_best=var_sel_best,
+        sk_best=sk_best,
     )
