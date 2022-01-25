@@ -17,13 +17,6 @@ AcceptedDataType = Union[
     np.ndarray,
 ]
 
-ThresholdType = Optional[
-    Union[
-        int,
-        str
-    ]
-]
-
 
 class LDA(
     BaseEstimator,  # type: ignore
@@ -68,7 +61,7 @@ class LDA(
         base_regressor: RegressorMixin = LinearRegressionL2(),
         *,
         encode_y: bool = True,
-        threshold: ThresholdType = None,
+        threshold: Optional[int] = None,
     ) -> None:
         self.base_regressor = base_regressor
         self.encode_y = encode_y
@@ -82,13 +75,14 @@ class LDA(
     ) -> LDA:
         # Check parameters
         X, classes, y_ind = self._argcheck_X_y(X, y)
+        p0 = np.mean(y_ind == 0)
+        p1 = 1 - p0
 
         # Encode target values if needed
         if self.encode_y:
-            p0 = np.mean(y_ind == 0)
-            p1 = 1 - p0
-            y_new = np.array([np.sqrt(p1/p0) if yy == 0 else -np.sqrt(p0/p1)
-                              for yy in y_ind])
+            y_new = np.array(
+                [-np.sqrt(p1/p0) if yy == 0 else np.sqrt(p0/p1)
+                 for yy in y_ind])
         else:
             y_new = y_ind
 
@@ -105,14 +99,13 @@ class LDA(
 
         # Set threshold
         if self.threshold is None:
-            self.threshold_ = 0.0
-        elif self.threshold == 'tailored':
-            self.threshold_ = np.mean(np.unique(y_new))
+            y_unique = np.unique(y_new)
+            self.threshold_ = p0*y_unique[0] + p1*y_unique[1]
         elif isinstance(self.threshold, (int, float)):
             self.threshold_ = self.threshold
         else:
             raise ValueError(
-                "Expected None, 'tailored' or a number for "
+                "Expected None or a numeric value for "
                 "parameter 'threshold'.")
 
         return self
@@ -142,9 +135,6 @@ class LDA(
 
         scores = self.base_regressor.predict(X)
         scores_centered = scores - self.threshold_
-
-        if self.encode_y:  # positive class was encoded with a negative label
-            scores_centered = -scores_centered
 
         return np.asarray(scores_centered)
 

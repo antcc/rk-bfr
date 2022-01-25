@@ -939,7 +939,14 @@ if FIT_REF_ALGS:
 
     basis_bspline = [BSpline(n_basis=p) for p in n_basis_bsplines]
     basis_fourier = [Fourier(n_basis=p) for p in n_basis_fourier]
-    basis_fpls = [FPLSBasis(X_fd, Y, n_basis=p) for p in n_components]
+
+    basis_fpls = []
+    for p in n_components:
+        try:
+            basis_fpls.append(FPLSBasis(X_fd, Y, n_basis=p))
+        except ValueError:
+            print(f"Can't create FPLSBasis with n_basis={p}")
+            continue
 
     params_reg = {"reg__alpha": alphas}
     params_svm = {"reg__C": alphas,
@@ -1225,7 +1232,7 @@ if INITIAL_SMOOTHING == "NW":
         f"Smoothing: {best_smoother.best_estimator_.__class__.__name__}"
         f"(λ={best_smoother.best_params_['smoothing_parameter']:.3f})")
 elif INITIAL_SMOOTHING == "Basis":
-    print(f"Smoothing: {basis.__class__.__name__}(n=N_BASIS)")
+    print(f"Smoothing: {basis.__class__.__name__}(n={N_BASIS})")
 else:
     print("Smoothing: none")
 print(f"Transform tau: {'true' if TRANSFORM_TAU else 'false'}")
@@ -1290,7 +1297,7 @@ if SAVE_RESULTS and rep + 1 > 0:
         [df_metrics_emcee, df_metrics_var_sel, df_metrics_sk],
         axis=0,
         ignore_index=True)
-    df.to_csv(filename + ".csv", index=False)
+    df.to_csv("out/" + filename + ".csv", index=False)
 
     # Save the top MSE values to arrays
     emcee_best = df_metrics_emcee["MSE"][:SAVE_TOP].apply(
@@ -1299,7 +1306,7 @@ if SAVE_RESULTS and rep + 1 > 0:
     sk_best = df_metrics_sk["MSE"][:SAVE_TOP]
 
     np.savez(
-        filename + ".npz",
+        "out/" + filename + ".npz",
         emcee_best=emcee_best,
         var_sel_best=var_sel_best,
         sk_best=sk_best,

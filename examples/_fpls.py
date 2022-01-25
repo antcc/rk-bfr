@@ -34,14 +34,18 @@ def _scalar_product(f, g, K, grid):
 # [https://stackoverflow.com/questions/67242144/reducing-loops-with-numpy]
 def _modified_gram_schmidt(fs, K, grid):
     basis = []
+
     for j, f in enumerate(fs):
         g = f
         for i in range(j):
             g_i = basis[i]
             g = g - _scalar_product(g, g_i, K, grid)*g_i
 
-        norm = np.sqrt(_scalar_product(g, g, K, grid))
-        basis.append(g/norm)
+        norm_sq = _scalar_product(g, g, K, grid)
+        if norm_sq > 0:
+            basis.append(g/np.sqrt(norm_sq))
+        else:
+            raise ValueError("Invalid input matrix")
 
     return np.array(basis)
 
