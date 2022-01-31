@@ -26,6 +26,7 @@ from sklearn.linear_model import LogisticRegression, Ridge, Lasso
 import utils
 from _lda import LDA
 from _fpls import FPLS, APLS, FPLSBasis
+from _optimal_bayes import NaiveGPClassifier
 # from _fpca_basis import FPCABasis
 
 import skfda
@@ -370,7 +371,7 @@ def cv_sk(classifiers, folds, X, Y, X_test, Y_test, columns_name, verbose=False)
 
         if name == "sk_fknn":
             n_features = f"K={clf_cv.best_params_['clf__n_neighbors']}"
-        elif name == "sk_mdc" or name == "sk_fnc":
+        elif name == "sk_mdc" or name == "sk_fnc" or name == "sk_optimal_bayes":
             n_features = X.data_matrix.shape[1]
         elif name == "sk_flr":
             n_features = clf_cv.best_estimator_["clf"].p
@@ -978,6 +979,16 @@ if FIT_REF_ALGS:
 
     """
     MULTIVARIATE MODELS
+    """
+
+    """
+    DATA SHOULD NOT BE CENTERED
+    # Optimal bayes rule in the discrete case (QDA)
+    classifiers.append(("sk_optimal_bayes",
+                       Pipeline([
+                           ("clf", NaiveGPClassifier(np.mean(Y == 1)))]),
+                       {}
+                        ))
     """
 
     # LDA (based on FPCA+Ridge regression)
