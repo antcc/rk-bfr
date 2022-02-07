@@ -13,6 +13,7 @@ examples/out/*
 
 # Ignore helper files
 graphs.ipynb
+test.py
 
 # Ignore pickled files
 *.mcmc

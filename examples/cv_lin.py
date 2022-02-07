@@ -10,7 +10,10 @@ from itertools import product
 import numpy as np
 import pandas as pd
 import scipy
+
 import emcee
+import pymc3 as pm
+import theano.tensor as tt
 
 from sklearn.svm import SVR
 from sklearn.linear_model import Ridge, Lasso
@@ -63,8 +66,17 @@ pd.set_option('display.max_columns', 80)
 # GLOBAL OPTIONS
 ###################################################################
 
+# MCMC algorithm
+alg = sys.argv[1].lower()
+if ":" in alg:
+    MCMC_ALG = alg.split(":")[0]
+    USE_NUTS = True
+else:
+    MCMC_ALG = alg
+    USE_NUTS = False
+
 # Randomness and reproducibility
-SEED = int(sys.argv[1])
+SEED = int(sys.argv[2])
 np.random.seed(SEED)
 rng = np.random.default_rng(SEED)
 
@@ -79,7 +91,7 @@ REAL_DATA = "Aemet"
 kernel_fn = utils.fractional_brownian_kernel
 beta_coef = utils.cholaquidis_scenario3
 
-INITIAL_SMOOTHING = "NW"  # None, 'NW' or 'Basis'
+INITIAL_SMOOTHING = None  # None, 'NW' or 'Basis'
 N_BASIS = 16
 STANDARDIZE_PREDICTORS = False
 STANDARDIZE_RESPONSE = False
@@ -90,25 +102,35 @@ smoothing_params = np.logspace(-4, 4, 50)
 
 folds = KFold(shuffle=True, random_state=SEED)
 
+# Model
+MIN_P = 2
+MAX_P = 4
+
 # Override options with command-line parameters
-if len(sys.argv) > 2:
-    if SYNTHETIC_DATA:
-        MODEL_GEN = sys.argv[2]
-    else:
-        REAL_DATA = sys.argv[2]
-    if sys.argv[3] == "1":
+if len(sys.argv) > 3:
+    if sys.argv[3][:2] == "s:":
+        SYNTHETIC_DATA = True
+        MODEL_GEN = sys.argv[3][2:]
+    elif sys.argv[3][:2] == "r:":
+        SYNTHETIC_DATA = False
+        REAL_DATA = sys.argv[3][2:]
+    if sys.argv[4] == "1":
         kernel_fn = utils.fractional_brownian_kernel
-    elif sys.argv[3] == "2":
+    elif sys.argv[4] == "2":
         kernel_fn = utils.ornstein_uhlenbeck_kernel
     else:
         kernel_fn = utils.squared_exponential_kernel
-    if sys.argv[4] == "NW" or sys.argv[4] == "Basis":
-        INITIAL_SMOOTHING = sys.argv[4]
+    if sys.argv[5] == "NW" or sys.argv[5] == "Basis":
+        INITIAL_SMOOTHING = sys.argv[5]
     else:
         INITIAL_SMOOTHING = None
 
+    if len(sys.argv) > 6:
+        MIN_P = int(sys.argv[6])
+        MAX_P = int(sys.argv[7])
+
 # Results
-FIT_REF_ALGS = True
+FIT_REF_ALGS = False
 REFIT_BEST_VAR_SEL = True
 PRINT_RESULTS_ONLINE = False
 PRINT_TO_FILE = False
@@ -126,22 +148,24 @@ N_REPS = 5
 mle_method = 'L-BFGS-B'
 mle_strategy = 'global'
 
-ps = [2, 3, 4]
+ps = np.arange(MIN_P, MAX_P + 1)
 gs = [5]
 etas = [0.01, 0.1, 1.0, 10.0]
 num_ps = len(ps)
 num_gs = len(gs)
 num_etas = len(etas)
 
-# -- Emcee sampler parameters
+# -- MCMC sampler parameters
 
+thin = 1
+thin_pp = 5
+
+# Emcee specific parameters
 n_walkers = 64
 n_iter_initial = 100
 n_iter = 1000
 return_pp = False
 return_ll = False
-thin = 1
-thin_pp = 5
 frac_random = 0.3
 
 sd_beta_init = 1.0
@@ -155,12 +179,22 @@ moves = [
     (emcee.moves.WalkMove(), 0.3),
 ]
 
+# Pymc specific parameters
+
+burn = 0
+
+n_samples_nuts = 1000
+tune_nuts = 1000
+target_accept = 0.8
+n_samples_metropolis = 6000
+tune_metropolis = 4000
+
+
 ###################################################################
 # AUXILIARY FUNCTIONS
 ###################################################################
 
 # -- MLE computation
-
 
 def neg_ll(theta_tr, X, Y, theta_space):
     """Transformed parameter vector 'theta_tr' is (β, logit τ, α0, log σ)."""
@@ -243,7 +277,7 @@ def compute_mle(
     return mle_theta, bic
 
 
-# -- Log-posterior model
+# -- Log-posterior model for emcee
 
 def log_prior(theta_tr):
     """Global parameters (for efficient parallelization):
@@ -349,9 +383,64 @@ def log_posterior(theta_tr, Y):
         return lpos
 
 
+# -- Log-posterior model for pymc
+
+def make_model_pymc(
+    theta_space, g, eta, X, Y,
+    names, names_aux, mle_theta=None
+):
+    n, N = X.shape
+    grid = theta_space.grid
+    p = theta_space.p
+
+    if mle_theta is not None:
+        b0 = mle_theta[:p]
+    else:
+        b0 = g*rng.standard_normal(size=p)  # <-- Change if needed
+
+    with pm.Model() as model:
+        X_pm = pm.Data('X', X)
+
+        alpha0_and_log_sigma = pm.DensityDist(
+            names_aux[0], lambda x: 0, shape=(2,))
+
+        alpha0 = pm.Deterministic(names[-2], alpha0_and_log_sigma[0])
+
+        log_sigma = alpha0_and_log_sigma[1]
+        sigma = pm.math.exp(log_sigma)
+        sigma2 = pm.Deterministic(names[-1], sigma**2)
+
+        tau = pm.Uniform(names[1], 0.0, 1.0, shape=(p,))
+
+        idx = np.abs(grid - tau[:, np.newaxis]).argmin(1)
+        X_tau = X_pm[:, idx]
+        G_tau = pm.math.matrix_dot(X_tau.T, X_tau)
+        G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
+        G_tau_reg = G_tau + eta * \
+            tt.max(tt.nlinalg.eigh(G_tau)[0])*np.identity(p)
+
+        def beta_lprior(x):
+            b = x - b0
+
+            return (0.5*pm.math.logdet(G_tau_reg)
+                    - p*log_sigma
+                    - pm.math.matrix_dot(b.T, G_tau_reg, b)/(2.*g*sigma2))
+
+        beta = pm.DensityDist(names[0], beta_lprior, shape=(p,))
+
+        expected_obs = alpha0 + pm.math.matrix_dot(X_tau, beta)
+
+        y_obs = pm.Normal('y_obs', mu=expected_obs, sigma=sigma, observed=Y)
+
+    return model
+
+
 # -- Sklearn CV and transformers
 
-def cv_sk(regressors, folds, X, Y, X_test, Y_test, columns_name, verbose=False):
+def cv_sk(
+    regressors, folds, X, Y, X_test, Y_test,
+    columns_name, verbose=False
+):
 
     df_metrics_sk = pd.DataFrame(columns=columns_name)
 
@@ -479,7 +568,7 @@ def bayesian_var_sel(idata, theta_space, names,
     params_svm = {"reg__C": alphas,
                   "reg__gamma": ['auto', 'scale']}
 
-    # Emcee+Lasso
+    # MCMC+Lasso
     regressors_var_sel.append((f"{prefix}_{point_est}+sk_lasso",
                                Pipeline([
                                    ("var_sel", VariableSelection(grid, idx_hat)),
@@ -488,7 +577,7 @@ def bayesian_var_sel(idata, theta_space, names,
                                params_reg
                                ))
 
-    # Emcee+Ridge
+    # MCMC+Ridge
     regressors_var_sel.append((f"{prefix}_{point_est}+sk_ridge",
                                Pipeline([
                                    ("var_sel", VariableSelection(grid, idx_hat)),
@@ -497,7 +586,7 @@ def bayesian_var_sel(idata, theta_space, names,
                                params_reg
                                ))
 
-    # Emcee+SVM RBF
+    # MCMC+SVM RBF
     regressors_var_sel.append((f"{prefix}_{point_est}+sk_svm_rbf",
                                Pipeline([
                                    ("var_sel", VariableSelection(grid, idx_hat)),
@@ -506,7 +595,7 @@ def bayesian_var_sel(idata, theta_space, names,
                                params_svm
                                ))
 
-    df_metrics_var_sel, reg_cv_var_sel = cv_sk(
+    df_metrics_var_sel, _ = cv_sk(
         regressors_var_sel, folds, X, Y,
         X_test, Y_test, columns_name, verbose)
 
@@ -642,9 +731,6 @@ X_test = X_test_fd.data_matrix.reshape(-1, N)
 Y = (Y - Y_m)/Y_sd
 Y_test = (Y_test - Y_m)/Y_sd
 
-utils.plot_dataset(
-    X, Y, n_samples=n_train if not SYNTHETIC_DATA else n_train//2)
-
 # Mean of response variable
 mean_alpha0_init = Y.mean()
 
@@ -657,7 +743,7 @@ else:
 theta_names_aux = ["α0 and log σ"]
 
 # Names of results
-results_columns_emcee = \
+results_columns_mcmc = \
     ["Estimator", "Features", "g", "η", "Mean_accpt(%)", "MSE", "RMSE", "R2"]
 results_columns_ref = ["Estimator", "Features", "MSE", "RMSE", "R2"]
 
@@ -745,49 +831,97 @@ try:
 
                     # -- Run sampler
 
-                    p0 = utils.weighted_initial_guess_around_value(
-                        theta_space, mle_theta, sd_beta_init, sd_tau_init,
-                        mean_alpha0_init, sd_alpha0_init, param_sigma2_init,
-                        sd_sigma2_init, n_walkers=n_walkers, rng=rng,
-                        frac_random=frac_random)
+                    if MCMC_ALG == "emcee":
 
-                    with Pool(N_CORES) as pool:
-                        sampler = emcee.EnsembleSampler(
-                            n_walkers, theta_space.ndim, log_posterior,
-                            pool=pool, args=(Y,),
-                            moves=moves)
-                        state = sampler.run_mcmc(
-                            p0, n_iter_initial, progress=False, store=False)
-                        sampler.reset()
-                        sampler.run_mcmc(
-                            state, n_iter,
-                            progress=PRINT_RESULTS_ONLINE,
-                            progress_kwargs={"desc": f"({it}/{total_models})"})
+                        p0 = utils.weighted_initial_guess_around_value(
+                            theta_space, mle_theta, sd_beta_init, sd_tau_init,
+                            mean_alpha0_init, sd_alpha0_init, param_sigma2_init,
+                            sd_sigma2_init, n_walkers=n_walkers, rng=rng,
+                            frac_random=frac_random)
 
-                    # -- Get InferenceData object
+                        with Pool(N_CORES) as pool:
+                            sampler = emcee.EnsembleSampler(
+                                n_walkers, theta_space.ndim, log_posterior,
+                                pool=pool, args=(Y,),
+                                moves=moves
+                            )
+                            state = sampler.run_mcmc(
+                                p0, n_iter_initial, progress=False, store=False
+                            )
+                            sampler.reset()
+                            sampler.run_mcmc(
+                                state, n_iter,
+                                progress=PRINT_RESULTS_ONLINE,
+                                progress_kwargs={
+                                    "desc": f"({it}/{total_models})"}
+                            )
 
-                    autocorr = sampler.get_autocorr_time(quiet=True)
-                    max_autocorr = np.max(autocorr)
-                    if np.isfinite(max_autocorr):
-                        burn = int(3*max_autocorr)
+                        # -- Get InferenceData object
+
+                        autocorr = sampler.get_autocorr_time(quiet=True)
+                        max_autocorr = np.max(autocorr)
+                        if np.isfinite(max_autocorr):
+                            burn = int(3*max_autocorr)
+                        else:
+                            burn = 500
+
+                        idata = utils.emcee_to_idata(
+                            sampler, theta_space, burn, thin,
+                            ["y_star"] if return_pp else [], return_ll)
+
+                        mean_acceptance[rep, i, j, k] = 100 * \
+                            np.mean(sampler.acceptance_fraction)
+
+                    elif MCMC_ALG == "pymc":
+
+                        model = make_model_pymc(
+                            theta_space, g, eta, X, Y, theta_names,
+                            theta_names_aux[:1], mle_theta
+                        )
+
+                        with model:
+                            if USE_NUTS:
+                                idata_pymc = pm.sample(
+                                    n_samples_nuts, cores=N_CORES,
+                                    tune=tune_nuts,
+                                    target_accept=target_accept,
+                                    return_inferencedata=True,
+                                    progressbar=PRINT_RESULTS_ONLINE)
+                            else:
+                                idata_pymc = pm.sample(
+                                    n_samples_metropolis,
+                                    cores=N_CORES,
+                                    tune=tune_metropolis,
+                                    step=pm.Metropolis(),
+                                    return_inferencedata=True,
+                                    progressbar=PRINT_RESULTS_ONLINE)
+
+                            idata = idata_pymc.sel(
+                                draw=slice(burn, None, thin))
+
                     else:
-                        burn = 500
-
-                    idata = utils.emcee_to_idata(
-                        sampler, theta_space, burn, thin,
-                        ["y_star"] if return_pp else [], return_ll)
+                        raise ValueError(
+                            "Invalid MCMC algorithm. Must be 'emcee' or 'pymc'.")
 
                     exec_times[rep, i, j, k] = time.time() - start
 
                     # -- Save metrics
 
-                    mean_acceptance[rep, i, j, k] = 100 * \
-                        np.mean(sampler.acceptance_fraction)
-
                     # Posterior mean estimate
-                    pp_test = utils.generate_pp(
-                        idata, X_test, theta_names,
-                        thin_pp, rng=rng, progress=False)
+                    if MCMC_ALG == "emcee":
+                        pp_test = utils.generate_pp(
+                            idata, X_test, theta_names,
+                            thin_pp, rng=rng, progress=False)
+                    elif MCMC_ALG == "pymc":
+                        model_test = make_model_pymc(
+                            theta_space, g, eta, X_test, Y_test,
+                            theta_names, theta_names_aux[:1], mle_theta)
+                        with model_test:
+                            pp_test = utils.generate_pp(
+                                idata, X_test,
+                                theta_names,
+                                rng=rng, progress=False)[:, ::thin_pp, :]
+
                     Y_hat_pp = pp_test.mean(axis=(0, 1))
                     metrics_pp = utils.regression_metrics(Y_test, Y_hat_pp)
                     mse[rep, i, j, k, 0] = metrics_pp["mse"]
@@ -818,14 +952,12 @@ except KeyboardInterrupt:
     print("\n[INFO] Process halted by user. Skipping...")
     rep = rep - 1
 
-finally:
-    rep = N_REPS - 1
 
 ###################################################################
 # COMPUTE AVERAGE RESULTS
 ###################################################################
 
-df_metrics_emcee = pd.DataFrame(columns=results_columns_emcee)
+df_metrics_mcmc = pd.DataFrame(columns=results_columns_mcmc)
 min_mse = np.inf
 min_mse_params = (-1, -1, -1)  # (i, j, k)
 
@@ -842,11 +974,12 @@ if rep + 1 > 0:
                         min_mse = mean_mse
                         min_mse_params = (i, j, k)
 
-                    df_metrics_emcee.loc[it] = [
-                        "emcee_" + pe,
+                    df_metrics_mcmc.loc[it] = [
+                        MCMC_ALG + "_" + pe,
                         p, g, eta,
-                        f"{mean_acceptance[:rep + 1, i, j, k].mean():.3f}"
-                        f"±{mean_acceptance[:rep + 1, i, j, k].std():.3f}",
+                        (f"{mean_acceptance[:rep + 1, i, j, k].mean():.3f}"
+                         f"±{mean_acceptance[:rep + 1, i, j, k].std():.3f}"
+                            if MCMC_ALG == "emcee" else "-"),
                         f"{mse[:rep + 1, i, j, k, m].mean():.3f}"
                         f"±{mse[:rep + 1, i, j, k, m].std():.3f}",
                         f"{rmse[:rep + 1, i, j, k, m].mean():.3f}"
@@ -856,7 +989,7 @@ if rep + 1 > 0:
                     ]
 
 df_metrics_mle.sort_values(results_columns_ref[-3], inplace=True)
-df_metrics_emcee.sort_values(results_columns_emcee[-3], inplace=True)
+df_metrics_mcmc.sort_values(results_columns_mcmc[-3], inplace=True)
 
 ###################################################################
 # BAYESIAN VARIABLE SELECTION ON BEST MODEL
@@ -876,36 +1009,68 @@ if REFIT_BEST_VAR_SEL and rep + 1 > 0:
 
     print(f"\nRefitting best model (p={p}, g={g}, η={eta})...")
 
-    p0 = utils.weighted_initial_guess_around_value(
-        theta_space, mle_theta, sd_beta_init, sd_tau_init,
-        mean_alpha0_init, sd_alpha0_init, param_sigma2_init,
-        sd_sigma2_init, n_walkers=n_walkers, rng=rng,
-        frac_random=frac_random)
+    if MCMC_ALG == "emcee":
 
-    with Pool(N_CORES) as pool:
-        sampler = emcee.EnsembleSampler(
-            n_walkers, theta_space.ndim, log_posterior,
-            pool=pool, args=(Y,),
-            moves=moves)
-        state = sampler.run_mcmc(
-            p0, n_iter_initial, progress=False, store=False)
-        sampler.reset()
-        sampler.run_mcmc(state, n_iter, progress=False)
+        p0 = utils.weighted_initial_guess_around_value(
+            theta_space, mle_theta, sd_beta_init, sd_tau_init,
+            mean_alpha0_init, sd_alpha0_init, param_sigma2_init,
+            sd_sigma2_init, n_walkers=n_walkers, rng=rng,
+            frac_random=frac_random)
 
-    # -- Get InferenceData object
+        with Pool(N_CORES) as pool:
+            sampler = emcee.EnsembleSampler(
+                n_walkers, theta_space.ndim, log_posterior,
+                pool=pool, args=(Y,),
+                moves=moves)
+            state = sampler.run_mcmc(
+                p0, n_iter_initial, progress=False, store=False)
+            sampler.reset()
+            sampler.run_mcmc(state, n_iter, progress=False)
 
-    autocorr = sampler.get_autocorr_time(quiet=True)
-    max_autocorr = np.max(autocorr)
-    if np.isfinite(max_autocorr):
-        burn = int(3*max_autocorr)
+        # -- Get InferenceData object
+
+        autocorr = sampler.get_autocorr_time(quiet=True)
+        max_autocorr = np.max(autocorr)
+        if np.isfinite(max_autocorr):
+            burn = int(3*max_autocorr)
+        else:
+            burn = 500
+
+        logging.disable(logging.NOTSET)  # Re-enable logger
+
+        idata = utils.emcee_to_idata(
+            sampler, theta_space, burn, thin,
+            ["y_star"] if return_pp else [], return_ll)
+
+    elif MCMC_ALG == "pymc":
+
+        model = make_model_pymc(
+            theta_space, g, eta, X, Y, theta_names,
+            theta_names_aux[:1], mle_theta
+        )
+
+        with model:
+            if USE_NUTS:
+                idata_pymc = pm.sample(
+                    n_samples_nuts, cores=N_CORES,
+                    tune=tune_nuts,
+                    target_accept=target_accept,
+                    return_inferencedata=True,
+                    progressbar=False)
+            else:
+                step = pm.Metropolis()
+                idata_pymc = pm.sample(
+                    n_samples_metropolis,
+                    cores=N_CORES,
+                    tune=tune_metropolis, step=step,
+                    return_inferencedata=True,
+                    progressbar=False)
+
+            idata = idata_pymc.sel(
+                draw=slice(burn, None, thin))
+
     else:
-        burn = 500
-
-    logging.disable(logging.NOTSET)  # Re-enable logger
-
-    idata = utils.emcee_to_idata(
-        sampler, theta_space, burn, thin,
-        ["y_star"] if return_pp else [], return_ll)
+        raise ValueError("Invalid MCMC algorithm. Must be 'emcee' or 'pymc'.")
 
     # -- Bayesian variable selection
 
@@ -916,9 +1081,10 @@ if REFIT_BEST_VAR_SEL and rep + 1 > 0:
             bayesian_var_sel(
                 idata, theta_space, theta_names, X_fd,
                 Y, X_test_fd, Y_test, folds, results_columns_ref,
-                prefix="emcee", point_est=pe))
+                prefix=MCMC_ALG, point_est=pe))
 
     df_metrics_var_sel.sort_values(results_columns_ref[-3], inplace=True)
+
 
 ###################################################################
 # FIT SKLEARN MODELS
@@ -1208,7 +1374,7 @@ elif INITIAL_SMOOTHING == "Basis":
 else:
     smoothing_str = "none"
 
-filename = ("reg_" + "emcee_" + data_name + "_smoothing_" + smoothing_str
+filename = ("reg_" + MCMC_ALG + "_" + data_name + "_smoothing_" + smoothing_str
             + "_frac_random_" + str(int(100*frac_random)) + "_walkers_"
             + str(n_walkers) + "_iters_" + str(n_iter) + "_reps_"
             + str(rep + 1) + "_seed_" + str(SEED))
@@ -1257,24 +1423,41 @@ if rep + 1 > 0:
     print("")
     print(df_metrics_mle.to_string(index=False, col_space=6))
 
-    print("\n-- EMCEE SAMPLER --")
-    print(f"N_walkers: {n_walkers}")
-    print(f"N_iters: {n_iter}")
-    print(f"MLE: {mle_method} + {mle_strategy}")
-    print(f"Frac_random: {frac_random}")
-    print(f"Burn-in: {n_iter_initial} + 3*max_autocorr")
-    print(f"Thinning chain/pp: {thin}/{thin_pp}")
-    print("Moves:")
-    for move, prob in moves:
-        print(f"  {move.__class__.__name__}, {prob}")
+    if MCMC_ALG == "emcee":
+        print("\n-- EMCEE SAMPLER --")
+        print(f"N_walkers: {n_walkers}")
+        print(f"N_iters: {n_iter}")
+        print(f"MLE: {mle_method} + {mle_strategy}")
+        print(f"Frac_random: {frac_random}")
+        print(f"Burn-in: {n_iter_initial} + 3*max_autocorr")
+        print(f"Thinning chain/pp: {thin}/{thin_pp}")
+        print("Moves:")
+        for move, prob in moves:
+            print(f"  {move.__class__.__name__}, {prob}")
+    elif MCMC_ALG == "pymc":
+        print("\n-- PYMC SAMPLER --")
+        print(f"N_walkers: {N_CORES}")
+        print("N_iters: "
+              + (f"{n_samples_nuts + tune_nuts}" if USE_NUTS else
+                 f"{n_samples_metropolis + tune_metropolis}"))
+        print(f"MLE: {mle_method} + {mle_strategy}")
+        print("Burn-in: "
+              + (f"{tune_nuts + burn}" if USE_NUTS else
+                 f"{tune_metropolis + burn}"))
+        print(f"Thinning chain/pp: {thin}/{thin_pp}")
+        print("Underlying algorithm: " + ("NUTS" if USE_NUTS else "Metropolis"))
+        if USE_NUTS:
+            print(f"  Target accept: {target_accept}")
+    else:
+        raise ValueError("Invalid MCMC algorithm. Must be 'emcee' or 'pymc'.")
 
-    print("\n-- RESULTS EMCEE --")
+    print(f"\n-- RESULTS {MCMC_ALG.upper()} --")
     print(f"Random iterations: {rep + 1}")
     print(
         f"Mean execution time: {exec_times[:rep + 1, ...].mean():.3f}"
         f"±{exec_times[:rep + 1, ...].std():.3f} s")
     print(f"Total execution time: {exec_times.sum()/60.:.3f} min\n")
-    print(df_metrics_emcee.to_string(index=False, col_space=6))
+    print(df_metrics_mcmc.to_string(index=False, col_space=6))
 
     if REFIT_BEST_VAR_SEL:
         print("\n-- RESULTS BAYESIAN VARIABLE SELECTION --")
@@ -1291,23 +1474,38 @@ if FIT_REF_ALGS:
 # SAVE RESULTS
 ###################################################################
 
-if SAVE_RESULTS and rep + 1 > 0:
-    # Save all the results dataframe in one CSV file
-    df = pd.concat(
-        [df_metrics_emcee, df_metrics_var_sel, df_metrics_sk],
-        axis=0,
-        ignore_index=True)
-    df.to_csv("out/" + filename + ".csv", index=False)
+try:
+    if SAVE_RESULTS and rep + 1 > 0:
+        # Save all the results dataframe in one CSV file
+        df_all = [df_metrics_mcmc]
+        if REFIT_BEST_VAR_SEL:
+            df_all += [df_metrics_var_sel]
+        if FIT_REF_ALGS:
+            df_all += [df_metrics_sk]
 
-    # Save the top MSE values to arrays
-    emcee_best = df_metrics_emcee["MSE"][:SAVE_TOP].apply(
-        lambda s: s.split("±")[0]).to_numpy(dtype=float)
-    var_sel_best = df_metrics_var_sel["MSE"][:SAVE_TOP]
-    sk_best = df_metrics_sk["MSE"][:SAVE_TOP]
+        df = pd.concat(
+            df_all,
+            axis=0,
+            ignore_index=True)
+        df.to_csv("out/" + filename + ".csv", index=False)
 
-    np.savez(
-        "out/" + filename + ".npz",
-        emcee_best=emcee_best,
-        var_sel_best=var_sel_best,
-        sk_best=sk_best,
-    )
+        # Save the top MSE values to arrays
+        mcmc_best = df_metrics_mcmc["MSE"][:SAVE_TOP].apply(
+            lambda s: s.split("±")[0]).to_numpy(dtype=float)
+        if REFIT_BEST_VAR_SEL:
+            var_sel_best = df_metrics_var_sel["MSE"][:SAVE_TOP]
+        else:
+            var_sel_best = np.zeros(1)
+        if FIT_REF_ALGS:
+            sk_best = df_metrics_sk["MSE"][:SAVE_TOP]
+        else:
+            sk_best = np.zeros(1)
+
+        np.savez(
+            "out/" + filename + ".npz",
+            mcmc_best=mcmc_best,
+            var_sel_best=var_sel_best,
+            sk_best=sk_best,
+        )
+except Exception as ex:
+    print(ex)
