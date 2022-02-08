@@ -77,7 +77,7 @@ pd.set_option('display.max_columns', 80)
 alg = sys.argv[1].lower()
 if ":" in alg:
     MCMC_ALG = alg.split(":")[0]
-    USE_NUTS = True
+    USE_NUTS = alg.split(":")[1] == "NUTS"
 else:
     MCMC_ALG = alg
     USE_NUTS = False
