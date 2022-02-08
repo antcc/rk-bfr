@@ -919,7 +919,9 @@ try:
                                 idata, X_test, theta_names,
                                 rng=rng,
                                 kind='classification',
-                                progress=False)[:, ::thin_pp, :]
+                                progress=False)
+                            pp_test_p = pp_test_p[:, ::thin_pp, :]
+                            pp_test_y = pp_test_y[:, ::thin_pp, :]
 
                     Y_hat_pp_mean = [utils.threshold(y)
                                      for y in pp_test_p.mean(axis=(0, 1))]
