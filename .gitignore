@@ -9,6 +9,7 @@ _*.txt
 
 # Ignore results files
 *.results
+*results.html
 examples/out/*
 
 # Ignore helper files
