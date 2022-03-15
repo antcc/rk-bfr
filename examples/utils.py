@@ -6,24 +6,26 @@ from matplotlib import pyplot as plt
 import arviz as az
 from tqdm.notebook import tqdm as tqdm_notebook
 from tqdm import tqdm
+import numbers
 from sklearn.metrics import r2_score
 from arviz.stats.stats_utils import make_ufunc
+from scipy.special import expit
 from arviz.plots.plot_utils import calculate_point_estimate
 import xarray as xr
 from scipy.integrate import trapz
-from scipy.special import expit
+import logging
 
 
-# Custom context manager for handling warnings
+class HandleLogger():
+    def __init__(self, verbose: int = 0):
+        self.verbose = verbose
 
-class IgnoreWarnings():
     def __enter__(self):
-        self.state = os.environ["PYTHONWARNINGS"]
-        os.environ["PYTHONWARNINGS"] = "ignore"
-        return self
+        if self.verbose < 2:
+            logging.disable(logging.CRITICAL)
 
-    def __exit__(self, exc_type, exc_value, exc_tb):
-        os.environ["PYTHONWARNINGS"] = self.state
+    def __exit__(self, exit_type, exit_value, exit_traceback):
+        logging.disable(logging.NOTSET)
 
 
 # Custom transformations
@@ -57,98 +59,49 @@ class LogSq():
         return np.exp(y)**2
 
 
-class ThetaSpace():
-    eps = 1e-6
+def check_random_state(seed):
+    """Turn seed into a np.random.Generator instance.
 
-    def __init__(
-            self, p, grid, names, names_ttr, labels,
-            tau_ttr=Logit(), sigma2_ttr=LogSq()):
-        self.p = p
-        self.grid = grid
-        self.ndim = 2*p + 2
-        self.names = names
-        self.names_ttr = names_ttr
-        self.labels = labels
+    For compatibility with sklearn, the case in which the
+    seed is a np.random.RandomState is also considered.
 
-        self.tau_ttr = tau_ttr
-        self.sigma2_ttr = sigma2_ttr
+    Parameters
+    ----------
+    seed : None, int, instance of np.random.RandomState or instance of Generator.
+        If seed is None, return a Generator with default initialization.
+        If seed is an int, return a new Generator instance seeded with seed.
+        If seed is an instance of RandomState, convert it to Generator.
+        If seed is already a Generator instance, return it.
+        Otherwise raise ValueError.
+    """
+    if seed is None:
+        return np.random.default_rng()
+    if isinstance(seed, numbers.Integral):
+        return np.random.default_rng(seed)
+    if isinstance(seed, np.random.RandomState):
+        return np.random.default_rng(seed.get_state()[1])
+    if isinstance(seed, np.random.Generator):
+        return seed
+    raise ValueError(
+        "%r cannot be used to seed a numpy.random.Generator instance" % seed
+    )
 
-        self.tau_lb = 0.0 + self.eps
-        self.tau_ub = 1.0 - self.eps
 
-        self.beta_idx = np.arange(0, self.p)
-        self.tau_idx = np.arange(self.p, 2*self.p)
-        self.alpha0_idx = -2
-        self.sigma2_idx = -1
+# Custom context manager for handling warnings
 
-    def get_beta(self, theta):
-        return theta[self.beta_idx]
+class IgnoreWarnings():
+    key = "PYTHONWARNINGS"
 
-    def get_tau(self, theta):
-        return theta[self.tau_idx]
+    def __enter__(self):
+        if self.key in os.environ:
+            self.state = os.environ["PYTHONWARNINGS"]
+        else:
+            self.state = "default"
+        os.environ["PYTHONWARNINGS"] = "ignore"
+        return self
 
-    def get_alpha0(self, theta):
-        return theta[self.alpha0_idx]
-
-    def get_sigma2(self, theta):
-        return theta[self.sigma2_idx]
-
-    def get_params(self, theta):
-        beta = theta[self.beta_idx]
-        tau = theta[self.tau_idx]
-        alpha0 = theta[self.alpha0_idx]
-        sigma2 = theta[self.sigma2_idx]
-
-        return beta, tau, alpha0, sigma2
-
-    def _perform_ttr(self, theta, ttrs):
-        ndim = len(theta.shape)
-
-        if ndim < 2:
-            theta = theta[np.newaxis, :]
-
-        tau_ttr = ttrs[0]
-        sigma2_ttr = ttrs[1]
-
-        theta_tr = np.hstack((
-            theta[:, :self.p],
-            tau_ttr(theta[:, self.p:2*self.p]),
-            np.atleast_2d(theta[:, -2]).T,
-            np.atleast_2d(sigma2_ttr(theta[:, -1])).T
-        ))
-
-        return theta_tr[0] if ndim == 1 else theta_tr
-
-    def forward(self, theta):
-        """Parameter is (β, τ, α0, σ2)."""
-        theta_tr = self._perform_ttr(
-            theta,
-            [self.tau_ttr.forward, self.sigma2_ttr.forward])
-
-        return theta_tr
-
-    def backward(self, theta_tr):
-        """Parameter 'theta_tr' is (β, logit τ, α0, log σ)."""
-        theta = self._perform_ttr(
-            theta_tr,
-            [self.tau_ttr.backward, self.sigma2_ttr.backward])
-
-        return theta
-
-    def clip_bounds(self, theta):
-        """Clip variables to their bounds."""
-
-        theta_clp = np.copy(theta)
-
-        # Restrict τ to [0, 1]
-        theta_clp[:, self.tau_idx] = \
-            np.clip(theta[:, self.tau_idx], self.tau_lb, self.tau_ub)
-
-        # Restrict σ2 to the positive reals
-        theta_clp[:, self.sigma2_idx] = \
-            np.clip(theta_clp[:, self.sigma2_idx], 0.0, None)
-
-        return theta_clp
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        os.environ["PYTHONWARNINGS"] = self.state
 
 
 def brownian_kernel(s, t, sigma=1.0):
@@ -363,7 +316,14 @@ def plot_dataset(X, Y, plot_means=True, n_samples=None, figsize=(9, 4)):
         axs[1].legend()
 
 
-def plot_dataset_classification(X, Y, plot_means=True, n_samples=None, figsize=(5, 4), ax=None):
+def plot_dataset_classification(
+    X,
+    Y,
+    plot_means=True,
+    n_samples=None,
+    figsize=(5, 4),
+    ax=None
+):
     fig, axs = plt.subplots(1, 2, figsize=figsize)
 
     n, N = X.shape
@@ -407,14 +367,6 @@ def plot_dataset_classification(X, Y, plot_means=True, n_samples=None, figsize=(
         axs[1].bar(1, freq[1], color="red",
                    label="Class 1", width=.3)
     axs[1].legend()
-
-
-def compute_bic(theta_space, neg_ll, mles, X, Y):
-    n = X.shape[0]
-    bics = np.array([theta_space.ndim*np.log(n) + 2*neg_ll(mle_theta, X, Y, theta_space)
-                     for mle_theta in mles])
-
-    return bics[0] if len(mles) == 1 else bics
 
 
 def initial_guess_random(
@@ -474,14 +426,17 @@ def initial_guess_around_value(
 def weighted_initial_guess_around_value(
         theta_space, value_tr, sd_beta, sd_tau,
         mean_alpha0, sd_alpha0, param_sigma2, sd_sigma2,
-        n_walkers=1, frac_random=0.5, rng=None):
+        n_walkers=1, frac_random=0.5, rng=None, sd_beta_random=None):
+
+    if sd_beta_random is None:
+        sd_beta_random = sd_beta
 
     n_random = int(frac_random*n_walkers)
     n_around = n_walkers - n_random
 
     if n_random > 0:
         init_1 = initial_guess_random(
-            theta_space, sd_beta, mean_alpha0,
+            theta_space, sd_beta_random, mean_alpha0,
             sd_alpha0, param_sigma2,
             n_walkers=n_random, rng=rng)
     else:
@@ -567,7 +522,14 @@ def plot_evolution(trace, labels):
     axes[-1].set_xlabel("step")
 
 
-def emcee_to_idata(sampler, theta_space, burn, thin, pp_names=[], is_blob_ll=False):
+def emcee_to_idata(
+    sampler,
+    theta_space,
+    burn,
+    thin,
+    pp_names=[],
+    is_blob_ll=False
+):
     names = theta_space.names
     names_ttr = theta_space.names_ttr
     p = theta_space.p
@@ -710,7 +672,8 @@ def plot_ppc(idata, n_samples=None, ax=None, legend=False, **kwargs):
 def bpv(pp, Y, t_stat):
     """Compute bayesian p-values for a given statistic.
        - t_stat is a vectorized function that accepts an 'axis' parameter.
-       - pp is an ndarrya of shape (..., len(Y)) representing the posterior samples."""
+       - pp is an ndarray of shape (..., len(Y)) representing the
+         posterior samples."""
     pp_flat = pp.reshape(-1, len(Y))
     t_stat_pp = t_stat(pp_flat, axis=-1)
     t_stat_observed = t_stat(Y)
