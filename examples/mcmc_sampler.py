@@ -2,28 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Union, Optional, Dict, Sequence, Tuple
-from multiprocessing import Pool
 import os
+from multiprocessing import Pool
+from typing import Dict, Optional, Sequence, Tuple, Union
 
-import numpy as np
-import emcee
 import arviz as az
-
-from sklearn.base import BaseEstimator, RegressorMixin, TransformerMixin
-from sklearn.utils.validation import check_is_fitted
-from sklearn.metrics import r2_score
-
-from skfda.representation import FData
-from skfda.representation.grid import FDataGrid
-from skfda.representation.basis import FDataBasis
-
+import emcee
+import numpy as np
 import utils
-from mle_utils import compute_mle
-from bayesian_model import (
-    PriorType, log_posterior_linear,
-    log_prior_linear, ThetaSpace
-)
+from bayesian_model import (PriorType, ThetaSpace, generate_pp,
+                            log_posterior_linear, log_prior_linear,
+                            point_estimate, point_predict)
+from mle import compute_mle
+from skfda.representation import FData
+from skfda.representation.basis import FDataBasis
+from skfda.representation.grid import FDataGrid
+from sklearn.base import BaseEstimator, RegressorMixin, TransformerMixin
+from sklearn.metrics import r2_score
+from sklearn.utils.validation import check_is_fitted
 
 DataType = Union[
     FData,
@@ -56,10 +52,13 @@ class BayesianLinearRegressionEmcee(
     """
 
     sd_beta: float = 1.0
+    sd_beta_random: float = 10.0
     sd_tau: float = 0.2
     sd_alpha0: float = 1.0
     param_sigma2: float = 2.0  # Shape parameter in inv_gamma distribution
     sd_sigma2: float = 1.0
+
+    default_point_estimates = ['mean', 'median', 'mode']
 
     def __init__(
         self,
@@ -71,6 +70,7 @@ class BayesianLinearRegressionEmcee(
         b0: Union[str, np.ndarray] = 'mle',
         g: float = 5.0,
         eta: float = 1.0,
+        prior_p: Optional[Dict] = None,
         frac_random: float = 0.3,
         n_iter: int = 1000,
         n_iter_warmup: int = 100,
@@ -79,15 +79,17 @@ class BayesianLinearRegressionEmcee(
         compute_pp: bool = False,
         compute_ll: bool = False,
         thin: int = 1,
+        thin_pp: int = 5,
         burn: int = 100,
-        frac_burn: int = 3,
+        burn_relative: int = 3,
+        mle_method: str = 'L-BFGS-B',
+        mle_strategy: str = 'global',
         n_jobs: int = -1,
         verbose: int = 0,
         progress_notebook: bool = False,
         progress_kwargs: Optional[Dict] = None,
         random_state: RandomType = None
     ) -> None:
-        """[TODO]"""
         self.theta_space = theta_space
         self.n_walkers = n_walkers
         self.log_prior = log_prior
@@ -95,6 +97,7 @@ class BayesianLinearRegressionEmcee(
         self.b0 = b0
         self.g = g
         self.eta = eta
+        self.prior_p = prior_p
         self.frac_random = frac_random
         self.n_iter = n_iter
         self.n_iter_warmup = n_iter_warmup
@@ -103,8 +106,11 @@ class BayesianLinearRegressionEmcee(
         self.compute_pp = compute_pp
         self.compute_ll = compute_ll
         self.thin = thin
+        self.thin_pp = thin_pp
         self.burn = burn
-        self.frac_burn = frac_burn
+        self.burn_relative = burn_relative
+        self.mle_method = mle_method
+        self.mle_strategy = mle_strategy
         self.n_jobs = n_jobs
         self.verbose = verbose
         self.progress_notebook = progress_notebook
@@ -116,38 +122,24 @@ class BayesianLinearRegressionEmcee(
         X: DataType,
         y: np.ndarray
     ) -> BayesianLinearRegressionEmcee:
-        """[TODO]"""
 
         X, y = self._argcheck_X_y(X, y)
-        self._mean_alpha0 = y.mean()
-
-        # MLE
-
-        self._mle = None
-
-        # Check parameters
-
+        self.rng_ = utils.check_random_state(self.random_state)
         n_jobs = self.n_jobs if self.n_jobs > 0 else os.cpu_count()
-        rng = utils.check_random_state(self.random_state)
+        self._mean_alpha0 = y.mean()
+        self.mle_ = None
 
         if isinstance(self.b0, str):
             if self.b0 == 'mle':
-                if self._mle is None:
-                    if self.verbose > 0:
-                        print("[BFLR] Computing MLE...")
-                    self._mle, _ = compute_mle(
-                        self.theta_space,
-                        X,
-                        y,
-                        False,
-                        n_jobs=n_jobs,
-                        rng=rng
-                    )
-                b0 = self._mle[self.theta_space.beta_idx]
+                if self.mle_ is None:
+                    self._compute_mle(X, y, n_jobs, self.rng_)
+                b0 = self.mle_[self._theta_space_fixed.beta_idx]
             elif self.b0 == 'random':
-                b0 = rng.normal(0, 10*self.sd_beta, self.theta_space.p)
+                b0 = self.rng_.normal(
+                    0, self.sd_beta_random, self.theta_space.p_max
+                )
             elif self.b0 == 'zero':
-                b0 = np.zeros(self.theta_space.p)
+                b0 = np.zeros(self.theta_space.p_max)
             else:
                 raise ValueError(
                     "%s is not a valid string for b0." %
@@ -173,6 +165,18 @@ class BayesianLinearRegressionEmcee(
                 "g": self.g,
                 "eta": self.eta,
             }
+
+            if self.theta_space.include_p:
+                if self.prior_p is None:
+                    raise ValueError(
+                        "Expected a dictionary for the prior probabilities "
+                        "of the parameter 'p'."
+                    )
+                if sum(self.prior_p.values()) != 1.0:
+                    raise ValueError(
+                        "The prior probabilities of 'p' must add up to one."
+                    )
+                prior_kwargs["prior_p"] = self.prior_p
         else:
             prior_kwargs = self.prior_kwargs
 
@@ -180,7 +184,7 @@ class BayesianLinearRegressionEmcee(
 
         posterior_kwargs = {
             "theta_space": self.theta_space,
-            "rng": rng,
+            "rng": self.rng_,
             "return_ll": self.compute_ll,
             "return_pp": self.compute_pp,
             "log_prior": log_prior,
@@ -189,29 +193,13 @@ class BayesianLinearRegressionEmcee(
 
         if isinstance(self.initial_state, str):
             if self.initial_state == 'mle':
-                if self._mle is None:
-                    if self.verbose > 0:
-                        print("[BFLR] Computing MLE...")
-                    self._mle, _ = compute_mle(
-                        self.theta_space,
-                        X,
-                        y,
-                        False,
-                        n_jobs=n_jobs,
-                        rng=rng
-                    )
-                initial_state = utils.weighted_initial_guess_around_value(
-                    self.theta_space, self._mle, self.sd_beta, self.sd_tau,
-                    self._mean_alpha0, self.sd_alpha0, self.param_sigma2,
-                    self.sd_sigma2, self.n_walkers, self.frac_random,
-                    rng, 10*self.sd_beta
-                )
+                if self.mle_ is None:
+                    self._compute_mle()
+                initial_state = self._weighted_initial_guess_around_mle(
+                    self.rng_)
             elif self.initial_state == 'random':
-                initial_state = utils.initial_guess_random(
-                    self.theta_space, 10*self.sd_beta, self._mean_alpha0,
-                    self.sd_alpha0, self.param_sigma2, self.n_walkers,
-                    rng
-                )
+                initial_state = self._initial_guess_random(
+                    self.n_walkers, self.rng_)
             else:
                 raise ValueError(
                     "%s is not a valid string for initial_state." %
@@ -233,9 +221,9 @@ class BayesianLinearRegressionEmcee(
         # Run sampler
 
         with Pool(n_jobs) as pool:
-            self.sampler = emcee.EnsembleSampler(
+            self.sampler_ = emcee.EnsembleSampler(
                 self.n_walkers,
-                self.theta_space.ndim,
+                self.theta_space.n_dim,
                 log_posterior_linear,
                 pool=pool,
                 args=(X, y,),
@@ -243,77 +231,226 @@ class BayesianLinearRegressionEmcee(
                 moves=moves
             )
 
-            # Initial state
-            state = self.sampler.run_mcmc(
-                initial_state, self.n_iter_warmup,
-                progress=False, store=False
-            )
-            self.sampler.reset()
+            # Set initial random state for the sampler
+            random_seed = self.rng_.integers(2**32)
+            self.sampler_.random_state = \
+                np.random.RandomState(random_seed).get_state()
+
+            if self.verbose > 1:
+                print("[BFLinReg] MCMC warmup iterations...")
+
+            # Warmup iterations
+            if self.n_iter_warmup > 0:
+                state = self.sampler_.run_mcmc(
+                    initial_state, self.n_iter_warmup,
+                    progress=False, store=False
+                )
+                self.sampler_.reset()
+            else:
+                state = initial_state
 
             if self.verbose > 0:
                 progress = 'notebook' if self.progress_notebook else True
+                if self.progress_kwargs is None:
+                    self.progress_kwargs = {"desc": "[BFLinReg] MCMC"}
             else:
                 progress = False
 
             # MCMC run
-            self.sampler.run_mcmc(
+            self.sampler_.run_mcmc(
                 state, self.n_iter,
                 progress=progress,
                 progress_kwargs=self.progress_kwargs
             )
 
-        # Get data
+        # Transform back parameters and discard unused ones if applicable
+        self._transform_trace()
 
-        with utils.HandleLogger(self.verbose):
-            autocorr = self.sampler.get_autocorr_time(quiet=True)
-
+        # Calculate burn-in
+        autocorr = self.autocorrelation_times(burn=0, thin=1)
         max_autocorr = np.max(autocorr)
-        if np.isfinite(max_autocorr):
-            burn = int(self.frac_burn*max_autocorr)
-        else:
-            burn = self.burn
 
-        self.idata_ = self._emcee_to_idata(burn)
+        if np.isfinite(max_autocorr):
+            self.burn_ = int(self.burn_relative*max_autocorr)
+        else:
+            self.burn_ = self.burn
+
+        # Get data (after burn-in and thinning)
+        self.idata_ = self._emcee_to_idata()
 
         return self
 
-    def predict(self, X: DataType) -> np.ndarray:
+    def predict(
+        self,
+        X: DataType,
+        strategy='mode',
+        bw='experimental'
+    ) -> np.ndarray:
+        """The parameter 'strategy' can be {'mean', 'median', 'mode', 'posterior_mean'}
+           or a callable representing a point estimate."""
         check_is_fitted(self)
         X = self._argcheck_X(X)
 
-        return np.zeros(X.shape[0])
+        if callable(strategy) or strategy in self.default_point_estimates:
+            y_pred = point_predict(
+                X,
+                self.idata_,
+                self.theta_space,
+                strategy,
+                kind='linear',
+                skipna=self.theta_space.include_p,
+                bw=bw
+            )
+        elif strategy == 'posterior_mean':
+            if self.verbose > 0:
+                progress = 'notebook' if self.progress_notebook else True
+            else:
+                progress = False
 
-    def score(self, X: DataType, y: np.ndarray) -> float:
+            pp_test = generate_pp(
+                self.idata_,
+                X,
+                self.theta_space,
+                self.thin_pp,
+                kind='linear',
+                rng=self.rng_,
+                progress=progress,
+            )
+            y_pred = pp_test.mean(axis=(0, 1))
+        else:
+            raise ValueError("Incorrect value for parameter 'strategy'.")
+
+        return y_pred
+
+    def transform(self, X: DataType, pe='mode', bw='experimental') -> DataType:
+        check_is_fitted(self)
+        grid = self.theta_space.grid
+
+        tau_hat = point_estimate(
+            self.idata_,
+            pe,
+            self.theta_space.names,
+            skipna=self.theta_space.include_p,
+            bw=bw
+        )[self.theta_space.tau_idx]
+        idx_hat = np.abs(grid - tau_hat[:, np.newaxis]).argmin(1)
+        idx_hat.sort()
+
+        X_red = self._variable_selection(X, idx_hat)
+
+        return X_red
+
+    def score(self, X: DataType, y: np.ndarray, strategy='mode') -> float:
         X, y = self._argcheck_X_y(X, y)
 
-        y_hat = self.predict(X)
-        r2 = r2_score(y, y_hat)
+        y_pred = self.predict(X, strategy)
+        r2 = r2_score(y, y_pred)
 
         return r2
-
-    def mle(self):
-        check_is_fitted(self)
-
-        if self._mle is not None:
-            return self._mle
-        else:
-            raise AttributeError("The MLE was not computed during training.")
 
     def mean_acceptance(self):
         check_is_fitted(self)
 
-        return np.mean(self.sampler.acceptance_fraction)
+        return np.mean(self.sampler_.acceptance_fraction)
 
-    def _emcee_to_idata(self, burn):
-        names = self.theta_space.names
-        names_ttr = self.theta_space.names_ttr
-        p = self.theta_space.p
+    def autocorrelation_times(self, burn=None, thin=None):
+        check_is_fitted(self)
+        if burn is None:
+            burn = self.burn_
+        if thin is None:
+            thin = self.thin
+
+        with utils.HandleLogger(self.verbose):
+            autocorr = self.sampler_.get_autocorr_time(
+                discard=burn, thin=thin, quiet=True)
+
+        return autocorr
+
+    def total_samples(self, burn=None, thin=None):
+        check_is_fitted(self)
+
+        if burn is None:
+            burn = self.burn_
+        if thin is None:
+            thin = self.thin
+
+        return len(self.sampler_.get_chain(discard=burn, thin=thin, flat=True))
+
+    def get_trace(self, burn=None, thin=None, flat=False):
+        check_is_fitted(self)
+
+        if burn is None:
+            burn = self.burn_
+        if thin is None:
+            thin = self.thin
+
+        trace = np.copy(self.sampler_.get_chain(discard=burn, thin=thin))
+
+        if flat:
+            trace = trace.reshape(-1, trace.shape[-1])  # All chains combined
+
+        return trace
+
+    def summary(self, bw='experimental', **kwargs):
+        skipna = self.theta_space.include_p
+        additional_stats = {
+            "min": np.nanmin if skipna else np.min,
+            "max": np.nanmax if skipna else np.max,
+            "median": np.nanmedian if skipna else np.median,
+            "mode": lambda x: utils.mode_fn(x, skipna=skipna, bw=bw),
+        }
+
+        return az.summary(
+            self.idata_,
+            extend=True,
+            kind='stats',
+            var_names=self.theta_space.names,
+            skipna=skipna,
+            labeller=self.theta_space.labeller,
+            stat_funcs=additional_stats,
+            **kwargs
+        )
+
+    def _transform_trace(self):
+        ts = self.theta_space
+        trace = self.sampler_.get_chain()
+
+        # Transform back parameters
+        trace[:, :, ts.tau_idx] = ts.tau_ttr.backward(
+            trace[:, :, ts.tau_idx])
+        trace[:, :, ts.sigma2_idx] = ts.sigma2_ttr.backward(
+            trace[:, :, ts.sigma2_idx])
+
+        # Set unused values to NaN on each sample
+        if ts.include_p:
+            trace = np.apply_along_axis(ts.set_unused_nan, -1, trace)
+
+    def _compute_mle(self, X, y, n_jobs, rng):
+        if self.verbose > 1:
+            print("[BFLinReg] Computing MLE...")
+        self._theta_space_fixed = self.theta_space.copy_p_fixed()
+
+        self.mle_, _ = compute_mle(
+            X,
+            y,
+            self._theta_space_fixed,
+            kind='linear',
+            method=self.mle_method,
+            strategy=self.mle_strategy,
+            n_jobs=n_jobs,
+            rng=rng
+        )
+
+    def _emcee_to_idata(self):
+        ts = self.theta_space
+        names = ts.names
         pp_names = ["y_star"] if self.compute_pp else []
         n_pp = len(pp_names)
         blob_names = []
         blob_groups = []
-        dims = {f"{names_ttr[0]}": ["vector"],
-                f"{names_ttr[1]}": ["vector"],
+        dims = {f"{names[ts.beta_idx_grouped]}": [ts.coord_name],
+                f"{names[ts.tau_idx_grouped]}": [ts.coord_name],
+                "X_obs": ["observation", "value"],
                 "y_obs": ["observation"]}
 
         if n_pp > 0:
@@ -332,27 +469,161 @@ class BayesianLinearRegressionEmcee(
             blob_names = None
             blob_groups = None
 
+        slices = [
+            ts.beta_idx,
+            ts.tau_idx,
+            ts.alpha0_idx,
+            ts.sigma2_idx
+        ]
+
+        if ts.include_p:
+            slices = [ts.p_idx] + slices
+
         idata = az.from_emcee(
-            self.sampler,
-            var_names=names_ttr,
-            slices=[slice(0, p), slice(p, 2*p), -2, -1],
+            self.sampler_,
+            var_names=names,
+            slices=slices,
             arg_names=["X_obs", "y_obs"],
+            arg_groups=["constant_data", "observed_data"],
             blob_names=blob_names,
             blob_groups=blob_groups,
             dims=dims
         )
 
-        # Burn-in and thinning
-        idata = idata.sel(draw=slice(burn, None, self.thin))
+        if self.verbose > 0:
+            print(f"[BFLinReg] Discarding the first {self.burn_} samples...")
 
-        idata.posterior[names[1]] = \
-            self.theta_space.tau_ttr.backward(
-                idata.posterior[names_ttr[1]])
-        idata.posterior[names[-1]] = \
-            self.theta_space.sigma2_ttr.backward(
-                idata.posterior[names_ttr[-1]])
+        # Burn-in and thinning
+        idata = idata.sel(draw=slice(self.burn_, None, self.thin))
+
+        # Set p values to integers
+        if ts.include_p:
+            idata.posterior[names[ts.p_idx]] = \
+                np.rint(idata.posterior[names[ts.p_idx]]).astype(int)
 
         return idata
+
+    def _initial_guess_random(self, n_samples, rng):
+        p = self.theta_space.p_max
+
+        beta_init = self.sd_beta_random * \
+            rng.standard_normal(size=(n_samples, p))
+        tau_init = rng.uniform(size=(n_samples, p))
+        alpha0_init = self._mean_alpha0 + self.sd_alpha0 * \
+            rng.standard_normal(size=(n_samples, 1))
+        sigma2_init = 1. / \
+            rng.standard_gamma(self.param_sigma2, size=(n_samples, 1))
+
+        init = np.hstack((
+            beta_init,
+            tau_init,
+            alpha0_init,
+            sigma2_init
+        ))
+
+        if self.theta_space.include_p:
+            p_init = rng.choice(
+                np.arange(self.theta_space.p_max) + 1,
+                size=n_samples,
+                p=sorted(self.prior_p.values())
+            )
+
+            init = np.vstack((
+                p_init,
+                init.T
+            )).T
+
+        init_tr = self.theta_space.forward(init)
+
+        return init_tr if n_samples > 1 else init_tr[0]
+
+    def _initial_guess_around_value(self, theta_fixed, n_samples, rng):
+        """'theta_fixed' is in the original space and does not include 'p'."""
+        if rng is None:
+            rng = np.random.default_rng()
+
+        p = self.theta_space.p_max
+
+        beta_jitter = self.sd_beta * \
+            rng.standard_normal(size=(n_samples, p))
+        tau_jitter = self.sd_tau*rng.standard_normal(size=(n_samples, p))
+        alpha0_jitter = self.sd_alpha0 * \
+            rng.standard_normal(size=(n_samples, 1))
+        sigma2_jitter = self.sd_sigma2 * \
+            rng.standard_normal(size=(n_samples, 1))
+
+        jitter = np.hstack((
+            beta_jitter,
+            tau_jitter,
+            alpha0_jitter,
+            sigma2_jitter
+        ))
+
+        value_jitter = theta_fixed[np.newaxis, :] + jitter
+
+        if self.theta_space.include_p:
+            p_init = rng.choice(
+                np.arange(self.theta_space.p_max) + 1,
+                size=n_samples,
+                p=sorted(self.prior_p.values())
+            )
+
+            value_jitter = np.vstack((
+                p_init,
+                value_jitter.T
+            )).T
+
+        value_jitter = self.theta_space.clip_bounds(value_jitter)
+        value_jitter_tr = self.theta_space.forward(value_jitter)
+
+        return value_jitter_tr if n_samples > 1 else value_jitter_tr[0]
+
+    def _weighted_initial_guess_around_mle(self, rng):
+        n_random = int(self.frac_random*self.n_walkers)
+        n_around = self.n_walkers - n_random
+
+        if n_random > 0:
+            init_1 = self._initial_guess_random(n_random, rng)
+        else:
+            init_1 = None
+
+        if n_around > 0:
+            init_2 = self._initial_guess_around_value(self.mle_, n_around, rng)
+        else:
+            init_2 = None
+
+        if init_1 is None:
+            init = init_2
+        elif init_2 is None:
+            init = init_1
+        else:
+            init = np.vstack((init_1, init_2))
+
+        rng.shuffle(init)
+
+        return init
+
+    def _variable_selection(self, X: DataType, idx: np.ndarray) -> DataType:
+        grid = self.theta_space.grid
+        N = len(grid)
+
+        if isinstance(X, np.ndarray):
+            if X.shape[1] != N:
+                raise ValueError(
+                    "Data must be compatible with the specified "
+                    "grid (i.e. 'self.theta_space.grid').")
+
+            X_red = X[:, idx]
+        elif isinstance(X, FDataBasis):
+            X_data = X.to_grid(grid_points=grid).data_matrix
+            X_red = FDataGrid(X_data[:, idx], grid[idx])
+        elif isinstance(X, FDataGrid):
+            X_data = X.data_matrix
+            X_red = FDataGrid(X_data[:, idx], grid[idx])
+        else:
+            raise ValueError('Data type not supported for X.')
+
+        return X_red
 
     def _argcheck_X(self, X: DataType) -> np.ndarray:
         grid = self.theta_space.grid

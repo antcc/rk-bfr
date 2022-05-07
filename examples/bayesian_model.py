@@ -1,11 +1,47 @@
 # encoding: utf-8
 
-from typing import Union, Optional, Dict, Any, Callable
+from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
+from scipy.special import expit
+from tqdm import tqdm
+from tqdm.notebook import tqdm as tqdm_notebook
+from utils import compute_mode_xarray
 
-import utils
 
+class Identity():
+    name = "Identity"
+
+    def forward(self, x):
+        return x
+
+    def backward(self, y):
+        return y
+
+
+class Logit():
+    eps = 1e-6
+    name = "Logit"
+
+    def forward(self, x):
+        return np.log(x/(1 - x + self.eps) + self.eps)
+
+    def backward(self, y):
+        return expit(y)   # 1./(1 + np.exp(-y))
+
+
+class LogSq():
+    eps = 1e-6
+    name = "LogSq"
+
+    def forward(self, x):
+        return np.log(np.sqrt(x) + self.eps)
+
+    def backward(self, y):
+        return np.exp(y)**2
+
+
+# Class for parameter space
 
 class ThetaSpace():
     eps = 1e-6
@@ -13,103 +49,239 @@ class ThetaSpace():
 
     def __init__(
         self,
-        p=3,
+        p_max=3,
         grid=None,
         *,
+        include_p=False,
         names=[],
-        names_ttr=[],
         labels=[],
-        tau_ttr=utils.Identity(),
-        sigma2_ttr=utils.LogSq()
+        labeller=None,
+        coord_name="vector",
+        tau_range=(0, 1),
+        beta_range=None,
+        tau_ttr=Identity(),
+        sigma2_ttr=LogSq()
     ):
+        # Save values
+
         if grid is None:
             grid = np.linspace(1./self.N, 1, self.N)
 
-        self.p = p
+        self.p_max = p_max
         self.grid = grid
+        self.include_p = include_p
         self.names = names
-        self.names_ttr = names_ttr
         self.labels = labels
-
+        self.labeller = labeller
+        self.coord_name = coord_name
+        self.tau_range = tau_range
+        self.beta_range = beta_range
         self.tau_ttr = tau_ttr
         self.sigma2_ttr = sigma2_ttr
 
-        self.tau_lb = tau_ttr.forward(0.0 + self.eps)
-        self.tau_ub = tau_ttr.forward(1.0 - self.eps)
-        self.ndim = 2*self.p + 2
-        self.beta_idx = np.arange(0, self.p)
-        self.tau_idx = np.arange(self.p, 2*self.p)
+        # Set dimension and access indices
+
+        self.n_dim = 2*self.p_max + 2
+        self.n_params = 4
+        self.beta_idx = np.arange(0, self.p_max)
+        self.beta_idx_grouped = 0
+        self.tau_idx = np.arange(self.p_max, 2*self.p_max)
+        self.tau_idx_grouped = 1
         self.alpha0_idx = -2
         self.sigma2_idx = -1
 
-    def get_beta(self, theta):
-        return theta[self.beta_idx]
+        if self.include_p:
+            self.n_dim += 1
+            self.n_params += 1
+            self.p_idx = 0
+            self.beta_idx += 1
+            self.beta_idx_grouped += 1
+            self.tau_idx += 1
+            self.tau_idx_grouped += 1
 
-    def get_tau(self, theta):
-        return theta[self.tau_idx]
+        self._check_dimensions()
 
-    def get_alpha0(self, theta):
-        return theta[self.alpha0_idx]
+        if len(self.names) > 0:
+            self.names_ttr = self._get_names_ttr()
 
-    def get_sigma2(self, theta):
-        return theta[self.sigma2_idx]
+    def copy_p_fixed(self):
+        if not self.include_p:
+            return self
 
-    def get_params(self, theta):
+        return ThetaSpace(
+            self.p_max,
+            self.grid,
+            include_p=False,
+            names=self.names[1:],
+            labels=self.labels[1:],
+            tau_range=self.tau_range,
+            beta_range=self.beta_range,
+            tau_ttr=self.tau_ttr,
+            sigma2_ttr=self.sigma2_ttr
+        )
+
+    def _round_p(self, p):
+        return np.rint(p).astype(int)
+
+    def get_params(self, theta, transform=None, clip=True):
+        self._check_theta(theta)
+
+        if transform is not None:
+            if transform == 'forward':
+                theta = self._perform_ttr(theta, is_forward=True)
+            elif transform == 'backward':
+                theta = self._perform_ttr(theta, is_forward=False)
+            else:
+                raise ValueError(
+                    "Incorrect value for 'transform'. Should be 'forward', "
+                    "'backward' or None but got {}".format(transform))
+
+        p = self._round_p(theta[self.p_idx]) if self.include_p else self.p_max
         beta = theta[self.beta_idx]
         tau = theta[self.tau_idx]
         alpha0 = theta[self.alpha0_idx]
         sigma2 = theta[self.sigma2_idx]
 
-        return beta, tau, alpha0, sigma2
+        if self.include_p and clip:
+            p_clp = np.clip(p, 1, self.p_max)
+            beta = beta[:p_clp]
+            tau = tau[:p_clp]
 
-    def _perform_ttr(self, theta, ttrs):
-        ndim = len(theta.shape)
-
-        if ndim < 2:
-            theta = theta[np.newaxis, :]
-
-        tau_ttr = ttrs[0]
-        sigma2_ttr = ttrs[1]
-
-        theta_tr = np.hstack((
-            theta[:, :self.p],
-            tau_ttr(theta[:, self.p:2*self.p]),
-            np.atleast_2d(theta[:, -2]).T,
-            np.atleast_2d(sigma2_ttr(theta[:, -1])).T
-        ))
-
-        return theta_tr[0] if ndim == 1 else theta_tr
+        return p, beta, tau, alpha0, sigma2
 
     def forward(self, theta):
-        """Parameter is (β, τ, α0, σ2)."""
+        self._check_theta(theta)
+
         theta_tr = self._perform_ttr(
             theta,
-            [self.tau_ttr.forward, self.sigma2_ttr.forward])
+            is_forward=True
+        )
 
         return theta_tr
 
     def backward(self, theta_tr):
-        """Parameter 'theta_tr' is (β, logit τ, α0, log σ)."""
+        self._check_theta(theta_tr)
+
         theta = self._perform_ttr(
             theta_tr,
-            [self.tau_ttr.backward, self.sigma2_ttr.backward])
+            is_forward=False
+        )
 
         return theta
 
-    def clip_bounds(self, theta):
-        """Clip variables to their bounds."""
+    def set_unused_nan(self, theta, inplace=True):
+        p = self._round_p(theta[self.p_idx])
 
+        if inplace:
+            t = theta
+        else:
+            t = np.copy(theta)
+
+        t[self.beta_idx[p:]] = np.nan
+        t[self.tau_idx[p:]] = np.nan
+
+        return t
+
+    def clip_bounds(self, theta):
+        """'theta' is in the original space."""
+        self._check_theta(theta)
+
+        n_dim = len(theta.shape)
         theta_clp = np.copy(theta)
 
-        # Restrict τ to [0, 1]
-        theta_clp[:, self.tau_idx] = \
-            np.clip(theta[:, self.tau_idx], self.tau_lb, self.tau_ub)
+        if n_dim < 2:
+            theta_clp = theta_clp[np.newaxis, :]
 
-        # Restrict σ2 to the positive reals
-        theta_clp[:, self.sigma2_idx] = \
-            np.clip(theta_clp[:, self.sigma2_idx], 0.0, None)
+        # Restrict p
+        if self.include_p:
+            theta_clp[:, self.p_idx] = np.clip(
+                theta_clp[:, self.p_idx],
+                1,
+                self.p_max
+            )
 
-        return theta_clp
+        # Restrict β
+        if self.beta_range is not None:
+            theta_clp[:, self.beta_idx] = np.clip(
+                theta_clp[:, self.beta_idx],
+                self.beta_range[0],
+                self.beta_range[1]
+            )
+
+        # Restrict τ
+        theta_clp[:, self.tau_idx] = np.clip(
+            theta_clp[:, self.tau_idx],
+            self.tau_range[0],
+            self.tau_range[1]
+        )
+
+        # Restrict σ2
+        theta_clp[:, self.sigma2_idx] = np.clip(
+            theta_clp[:, self.sigma2_idx],
+            self.eps,
+            None
+        )
+
+        return theta_clp[0] if n_dim == 1 else theta_clp
+
+    def _get_names_ttr(self):
+        names = self.names.copy()
+        tau_ttr_name = self.tau_ttr.name
+        sigma2_ttr_name = self.sigma2_ttr.name
+
+        if tau_ttr_name != "Identity":
+            names[self.tau_idx_grouped] = (
+                tau_ttr_name + " " + names[self.tau_idx_grouped])
+        if sigma2_ttr_name != "Identity":
+            names[self.sigma2_idx] = (
+                sigma2_ttr_name + " " + names[self.sigma2_idx])
+
+        return names
+
+    def _check_theta(self, theta):
+        if theta.shape[-1] != self.n_dim:
+            raise ValueError(
+                "Incorrect dimension for θ: should be {} but got {}".format(
+                    self.n_dim,
+                    theta.shape[-1])
+            )
+
+    def _check_dimensions(self):
+        n_names = len(self.names)
+        n_labels = len(self.labels)
+
+        if n_names > 0 and n_names != self.n_params:
+            raise ValueError(
+                "Incorrect size for 'names': should be {} but got {}".format(
+                    self.n_params,
+                    n_names)
+            )
+
+        if n_labels > 0 and n_labels != self.n_dim:
+            raise ValueError(
+                "Incorrect size for 'labels': should be {} but got {}".format(
+                    self.n_dim,
+                    n_labels)
+            )
+
+    def _perform_ttr(self, theta, is_forward):
+        n_dim = len(theta.shape)
+        theta_tr = np.copy(theta)
+
+        if n_dim < 2:
+            theta_tr = theta_tr[np.newaxis, :]
+
+        if is_forward:
+            tau_ttr = self.tau_ttr.forward
+            sigma2_ttr = self.sigma2_ttr.forward
+        else:
+            tau_ttr = self.tau_ttr.backward
+            sigma2_ttr = self.sigma2_ttr.backward
+
+        theta_tr[:, self.tau_idx] = tau_ttr(theta_tr[:, self.tau_idx])
+        theta_tr[:, self.sigma2_idx] = sigma2_ttr(theta_tr[:, self.sigma2_idx])
+
+        return theta_tr[0] if n_dim == 1 else theta_tr
 
 
 RandomType = Union[
@@ -127,6 +299,194 @@ PriorType = Optional[
 ]
 
 
+def generate_response_linear(X, theta, theta_space, noise=True, rng=None):
+    """Generate a linear response Y given X and θ"""
+    theta = np.asarray(theta)
+    p, beta, tau, alpha0, sigma2 = theta_space.get_params(theta)
+
+    idx = np.abs(theta_space.grid - tau[:, np.newaxis]).argmin(1)
+    y = alpha0 + X[:, idx]@beta
+
+    if noise:
+        n = X.shape[0]
+        if rng is None:
+            rng = np.random.default_rng()
+
+        y += np.sqrt(sigma2)*rng.standard_normal(size=n)
+
+    return y
+
+
+def probability_to_label(y_lin, noise=None, rng=None):
+    """Convert probabilities into class labels with eventual random noise."""
+    if rng is None:
+        rng = np.random.default_rng()
+
+    y = rng.binomial(1, expit(y_lin))
+
+    if noise is not None:
+        n_permute = int(len(y)*noise)
+
+        idx_0 = rng.choice(np.where(y == 0)[0], size=n_permute)
+        idx_1 = rng.choice(np.where(y == 1)[0], size=n_permute)
+
+        y[idx_0] = 1
+        y[idx_1] = 0
+
+    return y
+
+
+def generate_response_logistic(
+    X,
+    theta,
+    theta_space,
+    prob=True,
+    return_p=False,
+    rng=None
+):
+    """Generate a logistic response Y given X and θ.
+
+       Returns the response vector and (possibly) the probabilities associated.
+    """
+    y_lin = generate_response_linear(X, theta, theta_space, noise=False)
+
+    if prob:
+        y = probability_to_label(y_lin, rng=rng)
+    else:
+        # sigmoid(x) >= 0.5 iff x >= 0
+        y = [1 if yy >= 0 else 0 for yy in y_lin]
+
+    if return_p:
+        return y, expit(y_lin)
+    else:
+        return y
+
+
+# TODO: improve inner for loop and change generate_response so that it can
+# handle multiple thetas and return a matrix of (n_thetas, n)
+def generate_pp(
+        idata,
+        X,
+        theta_space,
+        thin=1,
+        kind='linear',
+        rng=None,
+        progress='notebook'
+):
+    if rng is None:
+        rng = np.random.default_rng()
+
+    n = X.shape[0]
+    posterior_trace = idata.posterior
+    n_chain = len(posterior_trace["chain"])
+    n_draw = len(posterior_trace["draw"])
+    range_draws = range(0, n_draw, thin)
+    pp_y = np.zeros((n_chain, len(range_draws), n))
+
+    if kind == 'logistic':
+        pp_p = np.zeros((n_chain, len(range_draws), n))
+
+    if progress is True:
+        chain_range = tqdm(
+            range(n_chain), "Posterior predictive samples")
+    elif progress == 'notebook':
+        chain_range = tqdm_notebook(
+            range(n_chain), "Posterior predictive samples")
+    else:
+        chain_range = range(n_chain)
+
+    for i in chain_range:
+        for j, jj in enumerate(range_draws):
+            theta_ds = posterior_trace[theta_space.names].isel(
+                chain=i, draw=jj).data_vars.values()
+            theta = np.concatenate([param.values.ravel()
+                                    for param in theta_ds])
+
+            if kind == 'logistic':
+                y_star, p_star = generate_response_logistic(
+                    X, theta, theta_space, return_p=True, rng=rng
+                )
+                pp_p[i, j, :] = p_star
+            else:
+                y_star = generate_response_linear(
+                    X, theta, theta_space, rng=rng
+                )
+
+            pp_y[i, j, :] = y_star
+
+    if kind == 'logistic':
+        return pp_p, pp_y.astype(int)
+    else:
+        return pp_y
+
+
+def point_estimate(idata, estimator_fn, names, skipna=False, bw='experimental'):
+    """If 'pe_fn' is a callable, it should have a specific signature, and also
+       treat the (chain, draw) dimensions suitably."""
+    posterior_trace = idata.posterior
+
+    if callable(estimator_fn):
+        theta_ds = estimator_fn(
+            posterior_trace[names],
+            dim=("chain", "draw"),
+            skipna=skipna
+        ).data_vars.values()
+    elif estimator_fn == 'mean':
+        theta_ds = posterior_trace[names].mean(
+            dim=("chain", "draw"),
+            skipna=skipna
+        ).data_vars.values()
+    elif estimator_fn == 'mode':
+        theta_ds = compute_mode_xarray(
+            posterior_trace[names],
+            dim=("chain", "draw"),
+            skipna=skipna,
+            bw=bw
+        ).data_vars.values()
+    elif estimator_fn == 'median':
+        theta_ds = posterior_trace[names].median(
+            dim=("chain", "draw"),
+            skipna=skipna
+        ).data_vars.values()
+    else:
+        raise ValueError(
+            "'estimator_fn' must be a callable or one of {mean, median, mode}.")
+
+    theta = np.concatenate([param.values.ravel() for param in theta_ds])
+
+    return theta
+
+
+def point_predict(
+    X,
+    idata,
+    theta_space,
+    estimator_fn='mode',
+    kind='linear',
+    skipna=False,
+    bw='experimental'
+):
+    theta = point_estimate(idata, estimator_fn, theta_space.names, skipna, bw)
+    if kind == 'linear':
+        y_pred = generate_response_linear(X, theta, theta_space, noise=False)
+    else:
+        y_pred = generate_response_logistic(X, theta, theta_space, prob=False)
+
+    return y_pred
+
+
+def bpv(pp_y, y, t_stat):
+    """Compute bayesian p-values for a given statistic t_stat.
+       - pp_y is an ndarray of shape (..., len(y)) representing the
+         posterior predictive samples of the response variable.
+       - t_stat is a vectorized function that accepts an 'axis' parameter."""
+    pp_y_flat = pp_y.reshape(-1, len(y))
+    t_stat_pp = t_stat(pp_y_flat, axis=-1)
+    t_stat_observed = t_stat(y)
+
+    return np.mean(t_stat_pp <= t_stat_observed)
+
+
 #
 # Default log-prior model for linear regression
 #
@@ -140,23 +500,39 @@ def log_prior_linear(
     b0,
     g,
     eta,
+    prior_p=None
 ):
-    n, N = X.shape
-    p = theta_space.p
-    grid = theta_space.grid
+    p, beta_full, tau_full, alpha0, sigma2 = \
+        theta_space.get_params(theta_tr, transform='backward', clip=False)
 
-    theta = theta_space.backward(theta_tr)
-    beta, tau, alpha0, sigma2 = theta_space.get_params(theta)
-    log_sigma = theta_space.get_sigma2(theta_tr)
+    # Check bounds on parameters
+    if theta_space.include_p:
+        if p < 1 or p > theta_space.p_max:
+            return -np.inf
 
-    if (tau < theta_space.tau_lb).any() or (tau > theta_space.tau_ub).any():
+    if theta_space.beta_range is not None:
+        if ((beta_full < theta_space.beta_range[0]).any()
+                or (beta_full > theta_space.beta_range[1]).any()):
+            return -np.inf
+
+    if ((tau_full < theta_space.tau_range[0]).any()
+            or (tau_full > theta_space.tau_range[1]).any()):
         return -np.inf
 
+    if sigma2 <= theta_space.eps:
+        return -np.inf
+
+    tau = tau_full[:p]
+    beta = beta_full[:p]
+    idx = np.abs(theta_space.grid - tau[:, np.newaxis]).argmin(1)
+    X_tau = X[:, idx]
+    log_sigma = LogSq().forward(sigma2)
+
     # Transform variables
-    b = beta - b0
+    b = beta - b0[:p]
 
     # Compute and regularize G_tau
-    idx = np.abs(grid - tau[:, np.newaxis]).argmin(1)
+    idx = np.abs(theta_space.grid - tau[:, np.newaxis]).argmin(1)
     X_tau = X[:, idx]
     G_tau = X_tau.T@X_tau
     G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
@@ -164,9 +540,12 @@ def log_prior_linear(
         np.max(np.linalg.eigvalsh(G_tau))*np.identity(p)
 
     # Compute log-prior
-    log_prior = (0.5*utils.logdet(G_tau_reg)
+    log_prior = (0.5*np.linalg.slogdet(G_tau_reg)[1]
                  - p*log_sigma
                  - b.T@G_tau_reg@b/(2*g*sigma2))
+
+    if theta_space.include_p:
+        log_prior += np.log(prior_p[p])
 
     return log_prior
 
@@ -215,7 +594,7 @@ def log_posterior_linear(
     # Compute posterior predictive samples
     if return_pp:
         theta = theta_space.backward(theta_tr)
-        pp = utils.generate_response(X, theta, rng=rng)
+        pp = generate_response_linear(X, theta, theta_space, rng=rng)
 
     # Return information
     if return_pp and return_ll:
@@ -235,15 +614,13 @@ def log_likelihood_linear(
     theta_space,
     return_ll=False
 ):
-    n, N = X.shape
-    grid = theta_space.grid
+    n = X.shape[0]
+    p, beta, tau, alpha0, sigma2 = \
+        theta_space.get_params(theta_tr, transform='backward')
 
-    theta = theta_space.backward(theta_tr)
-    beta, tau, alpha0, sigma2 = theta_space.get_params(theta)
-    log_sigma = theta_space.get_sigma2(theta_tr)
-
-    idx = np.abs(grid - tau[:, np.newaxis]).argmin(1)
+    idx = np.abs(theta_space.grid - tau[:, np.newaxis]).argmin(1)
     X_tau = X[:, idx]
+    log_sigma = LogSq().forward(sigma2)
 
     ll = (-n*log_sigma
           - np.linalg.norm(y - alpha0 - X_tau@beta)**2/(2*sigma2))
