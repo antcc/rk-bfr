@@ -8,6 +8,8 @@ from sklearn.cross_decomposition import PLSRegression
 from sklearn.utils.validation import check_is_fitted
 
 
+# Custom context manager for handling warnings
+
 class IgnoreWarnings():
     key = "PYTHONWARNINGS"
 

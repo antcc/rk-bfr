@@ -10,9 +10,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from _fpls import APLS, FPLS
-from arviz import make_ufunc, kde
-from scipy.stats import mode
+from arviz import kde, make_ufunc
 from IPython.display import display
+from scipy.stats import mode
 from skfda.ml.regression import KNeighborsRegressor
 from skfda.ml.regression import LinearRegression as FLinearRegression
 from skfda.preprocessing.dim_reduction.feature_extraction import FPCA
@@ -84,6 +84,11 @@ class IgnoreWarnings():
 
     def __exit__(self, exc_type, exc_value, exc_tb):
         os.environ["PYTHONWARNINGS"] = self.state
+
+
+def normalize_grid(grid, low=0, high=1):
+    g_min, g_max = np.min(grid), np.max(grid)
+    return (grid - g_min)/(g_max - g_min)
 
 
 def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
@@ -237,7 +242,8 @@ def multiple_linear_regression_cv(
     pe='mode',
     df=None,
     sort_by=-2,
-    verbose=False
+    verbose=False,
+    random_state=None,
 ):
     if len(regressors) == 0:
         reg_lst = []
@@ -256,7 +262,7 @@ def multiple_linear_regression_cv(
         # MCMC+Ridge
         reg_lst.append((
             f"{prefix}_{pe}+sk_ridge",
-            Pipeline([("reg", Ridge())]),
+            Pipeline([("reg", Ridge(random_state=random_state))]),
             params_regularizer
         ))
 
@@ -293,16 +299,13 @@ def run_emcee(
     X_test,
     y_test,
     folds,
-    rng=None,
     n_jobs=1,
     sort_by=-2,
+    compute_metrics=True,
     verbose=False,
-    notebook=False
+    notebook=False,
+    random_state=None,
 ):
-    if rng is None:
-        rng = np.random.default_rng()
-
-    theta_space = reg_emcee.theta_space
     reg_emcee.fit(X, y)
 
     if verbose:
@@ -315,47 +318,53 @@ def run_emcee(
 
         print("\nComputing metrics...\n")
 
-    # -- Compute metrics using several point estimates
+    if compute_metrics:
 
-    y_pred_pp = reg_emcee.predict(X_test, strategy='posterior_mean')
-    df_metrics = linear_regression_metrics(
-        y_test,
-        y_pred_pp,
-        theta_space.p_max,  # TODO: take into account p-free
-        "emcee_posterior_mean",
-        sort_by=sort_by
-    )
+        # -- Compute metrics using several point estimates
 
-    for pe in reg_emcee.default_point_estimates:
-        y_pred_pe = reg_emcee.predict(X_test, strategy=pe)
+        y_pred_pp = reg_emcee.predict(X_test, strategy='posterior_mean')
         df_metrics = linear_regression_metrics(
             y_test,
-            y_pred_pe,
-            theta_space.p_max,  # TODO: take into account p-free
-            "emcee_" + pe,
-            df=df_metrics,
+            y_pred_pp,
+            reg_emcee.n_components("posterior_mean"),
+            "emcee_posterior_mean",
             sort_by=sort_by
         )
 
-    # -- Bayesian variable selection
+        for pe in reg_emcee.default_point_estimates:
+            y_pred_pe = reg_emcee.predict(X_test, strategy=pe)
+            df_metrics = linear_regression_metrics(
+                y_test,
+                y_pred_pe,
+                reg_emcee.n_components(pe),
+                "emcee_" + pe,
+                df=df_metrics,
+                sort_by=sort_by
+            )
 
-    for pe in reg_emcee.default_point_estimates:
-        X_red = reg_emcee.transform(X, pe=pe)
-        X_test_red = reg_emcee.transform(X_test, pe=pe)
+        # -- Bayesian variable selection
 
-        df_metrics = multiple_linear_regression_cv(
-            X_red,
-            y,
-            X_test_red,
-            y_test,
-            folds,
-            n_jobs=n_jobs,
-            prefix="emcee",
-            pe=pe,
-            df=df_metrics,
-            sort_by=sort_by,
-            verbose=False
-        )
+        for pe in reg_emcee.default_point_estimates:
+            X_red = reg_emcee.transform(X, pe=pe)
+            X_test_red = reg_emcee.transform(X_test, pe=pe)
+
+            df_metrics = multiple_linear_regression_cv(
+                X_red,
+                y,
+                X_test_red,
+                y_test,
+                folds,
+                n_jobs=n_jobs,
+                prefix="emcee",
+                pe=pe,
+                df=df_metrics,
+                sort_by=sort_by,
+                verbose=False,
+                random_state=random_state
+            )
+
+    else:
+        df_metrics = pd.DataFrame()
 
     return df_metrics
 
@@ -368,7 +377,7 @@ def linear_regression_comparison_suite(
     params_basis,
     params_pls,
     params_knn,
-    seed=None
+    random_state=None
 ):
     regressors = []
 
@@ -431,7 +440,7 @@ def linear_regression_comparison_suite(
     regressors.append(("pca+sk_ridge",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
-                           ("dim_red", PCA(random_state=seed)),
+                           ("dim_red", PCA(random_state=random_state)),
                            ("reg", Ridge())]),
                        {**params_dim_red, **params_regularizer}
                        ))
@@ -499,7 +508,7 @@ def linear_regression_comparison_suite(
     regressors.append(("pca+sk_svm_rbf",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
-                           ("dim_red", PCA(random_state=seed)),
+                           ("dim_red", PCA(random_state=random_state)),
                            ("reg", SVR(kernel='rbf'))]),
                        {**params_dim_red, **params_svm}
                        ))

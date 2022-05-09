@@ -120,7 +120,7 @@ class ThetaSpace():
             sigma2_ttr=self.sigma2_ttr
         )
 
-    def _round_p(self, p):
+    def round_p(self, p):
         return np.rint(p).astype(int)
 
     def get_params(self, theta, transform=None, clip=True):
@@ -136,7 +136,7 @@ class ThetaSpace():
                     "Incorrect value for 'transform'. Should be 'forward', "
                     "'backward' or None but got {}".format(transform))
 
-        p = self._round_p(theta[self.p_idx]) if self.include_p else self.p_max
+        p = self.round_p(theta[self.p_idx]) if self.include_p else self.p_max
         beta = theta[self.beta_idx]
         tau = theta[self.tau_idx]
         alpha0 = theta[self.alpha0_idx]
@@ -170,7 +170,7 @@ class ThetaSpace():
         return theta
 
     def set_unused_nan(self, theta, inplace=True):
-        p = self._round_p(theta[self.p_idx])
+        p = self.round_p(theta[self.p_idx])
 
         if inplace:
             t = theta
@@ -466,13 +466,16 @@ def point_predict(
     skipna=False,
     bw='experimental'
 ):
-    theta = point_estimate(idata, estimator_fn, theta_space.names, skipna, bw)
+    theta_hat = point_estimate(
+        idata, estimator_fn, theta_space.names, skipna, bw)
     if kind == 'linear':
-        y_pred = generate_response_linear(X, theta, theta_space, noise=False)
+        y_pred = generate_response_linear(
+            X, theta_hat, theta_space, noise=False)
     else:
-        y_pred = generate_response_logistic(X, theta, theta_space, prob=False)
+        y_pred = generate_response_logistic(
+            X, theta_hat, theta_space, prob=False)
 
-    return y_pred
+    return y_pred, theta_hat
 
 
 def bpv(pp_y, y, t_stat):

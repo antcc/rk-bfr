@@ -50,7 +50,6 @@ class BayesianLinearRegressionEmcee(
 
     See [REFERENCE].
     """
-
     sd_beta: float = 1.0
     sd_beta_random: float = 10.0
     sd_tau: float = 0.2
@@ -71,10 +70,10 @@ class BayesianLinearRegressionEmcee(
         g: float = 5.0,
         eta: float = 1.0,
         prior_p: Optional[Dict] = None,
-        frac_random: float = 0.3,
         n_iter: int = 1000,
         n_iter_warmup: int = 100,
         initial_state: Union[str, np.ndarray] = 'mle',
+        frac_random: float = 0.3,
         moves: Optional[Sequence[emcee.Move]] = None,
         compute_pp: bool = False,
         compute_ll: bool = False,
@@ -98,10 +97,10 @@ class BayesianLinearRegressionEmcee(
         self.g = g
         self.eta = eta
         self.prior_p = prior_p
-        self.frac_random = frac_random
         self.n_iter = n_iter
         self.n_iter_warmup = n_iter_warmup
         self.initial_state = initial_state
+        self.frac_random = frac_random
         self.moves = moves
         self.compute_pp = compute_pp
         self.compute_ll = compute_ll
@@ -126,29 +125,13 @@ class BayesianLinearRegressionEmcee(
         X, y = self._argcheck_X_y(X, y)
         self.rng_ = utils.check_random_state(self.random_state)
         n_jobs = self.n_jobs if self.n_jobs > 0 else os.cpu_count()
+        ts = self.theta_space
         self._mean_alpha0 = y.mean()
         self.mle_ = None
+        self._theta_space_fixed = None
 
-        if isinstance(self.b0, str):
-            if self.b0 == 'mle':
-                if self.mle_ is None:
-                    self._compute_mle(X, y, n_jobs, self.rng_)
-                b0 = self.mle_[self._theta_space_fixed.beta_idx]
-            elif self.b0 == 'random':
-                b0 = self.rng_.normal(
-                    0, self.sd_beta_random, self.theta_space.p_max
-                )
-            elif self.b0 == 'zero':
-                b0 = np.zeros(self.theta_space.p_max)
-            else:
-                raise ValueError(
-                    "%s is not a valid string for b0." %
-                    self.b0
-                )
-        elif isinstance(self.b0, np.ndarray):
-            b0 = self.b0
-        else:
-            raise ValueError("Invalid value for b0.")
+        if ts.include_p:
+            self.n_components_default_pe = {}
 
         # Prior
 
@@ -160,13 +143,35 @@ class BayesianLinearRegressionEmcee(
             raise ValueError("Invalid value for log_prior.")
 
         if self.prior_kwargs is None:
+            if isinstance(self.b0, str):
+                if self.b0 == 'mle':
+                    if self.mle_ is None:
+                        self.mle_, self._theta_space_fixed = \
+                            self._compute_mle(X, y, n_jobs, self.rng_)
+                    b0 = self.mle_[self._theta_space_fixed.beta_idx]
+                elif self.b0 == 'random':
+                    b0 = self.rng_.normal(
+                        0, self.sd_beta_random, ts.p_max
+                    )
+                elif self.b0 == 'zero':
+                    b0 = np.zeros(ts.p_max)
+                else:
+                    raise ValueError(
+                        "%s is not a valid string for b0." %
+                        self.b0
+                    )
+            elif isinstance(self.b0, np.ndarray):
+                b0 = self.b0
+            else:
+                raise ValueError("Invalid value for b0.")
+
             prior_kwargs = {
                 "b0": b0,
                 "g": self.g,
                 "eta": self.eta,
             }
 
-            if self.theta_space.include_p:
+            if ts.include_p:
                 if self.prior_p is None:
                     raise ValueError(
                         "Expected a dictionary for the prior probabilities "
@@ -183,7 +188,7 @@ class BayesianLinearRegressionEmcee(
         # Posterior
 
         posterior_kwargs = {
-            "theta_space": self.theta_space,
+            "theta_space": ts,
             "rng": self.rng_,
             "return_ll": self.compute_ll,
             "return_pp": self.compute_pp,
@@ -194,7 +199,8 @@ class BayesianLinearRegressionEmcee(
         if isinstance(self.initial_state, str):
             if self.initial_state == 'mle':
                 if self.mle_ is None:
-                    self._compute_mle()
+                    self.mle_, self._theta_space_fixed = \
+                        self._compute_mle(X, y, n_jobs, self.rng_)
                 initial_state = self._weighted_initial_guess_around_mle(
                     self.rng_)
             elif self.initial_state == 'random':
@@ -223,7 +229,7 @@ class BayesianLinearRegressionEmcee(
         with Pool(n_jobs) as pool:
             self.sampler_ = emcee.EnsembleSampler(
                 self.n_walkers,
-                self.theta_space.n_dim,
+                ts.n_dim,
                 log_posterior_linear,
                 pool=pool,
                 args=(X, y,),
@@ -268,12 +274,14 @@ class BayesianLinearRegressionEmcee(
 
         # Calculate burn-in
         autocorr = self.autocorrelation_times(burn=0, thin=1)
-        max_autocorr = np.max(autocorr)
+        max_autocorr = np.nanmax(autocorr)
 
         if np.isfinite(max_autocorr):
-            self.burn_ = int(self.burn_relative*max_autocorr)
+            burn = int(self.burn_relative*max_autocorr)
         else:
-            self.burn_ = self.burn
+            burn = self.burn
+
+        self.burn_ = np.minimum(burn, self.n_iter//10)
 
         # Get data (after burn-in and thinning)
         self.idata_ = self._emcee_to_idata()
@@ -290,17 +298,22 @@ class BayesianLinearRegressionEmcee(
            or a callable representing a point estimate."""
         check_is_fitted(self)
         X = self._argcheck_X(X)
+        ts = self.theta_space
 
         if callable(strategy) or strategy in self.default_point_estimates:
-            y_pred = point_predict(
+            y_pred, theta_hat = point_predict(
                 X,
                 self.idata_,
-                self.theta_space,
+                ts,
                 strategy,
                 kind='linear',
-                skipna=self.theta_space.include_p,
+                skipna=ts.include_p,
                 bw=bw
             )
+
+            if not callable(strategy) and ts.include_p:
+                self.n_components_default_pe[strategy] = theta_hat[ts.p_idx]
+
         elif strategy == 'posterior_mean':
             if self.verbose > 0:
                 progress = 'notebook' if self.progress_notebook else True
@@ -310,13 +323,14 @@ class BayesianLinearRegressionEmcee(
             pp_test = generate_pp(
                 self.idata_,
                 X,
-                self.theta_space,
+                ts,
                 self.thin_pp,
                 kind='linear',
                 rng=self.rng_,
                 progress=progress,
             )
             y_pred = pp_test.mean(axis=(0, 1))
+
         else:
             raise ValueError("Incorrect value for parameter 'strategy'.")
 
@@ -360,9 +374,28 @@ class BayesianLinearRegressionEmcee(
         if thin is None:
             thin = self.thin
 
-        with utils.HandleLogger(self.verbose):
+        """with utils.HandleLogger(self.verbose):
             autocorr = self.sampler_.get_autocorr_time(
-                discard=burn, thin=thin, quiet=True)
+                discard=burn, thin=thin, quiet=True)"""
+
+        with utils.HandleLogger(self.verbose):
+            if self.theta_space.include_p:
+                x = self.sampler_.get_chain(discard=burn, thin=thin)
+                n_dim = self.theta_space.n_dim
+                autocorr = np.zeros(n_dim)
+
+                for dim in range(n_dim):
+                    x_dim = x[:, :, dim]
+                    # Remove chains where all values are NaN
+                    x_dim = x_dim[:, ~np.isnan(x_dim).all(axis=0)]
+                    # Replace NaN with 0.0 for computing autocorrelation
+                    x_dim = np.nan_to_num(x_dim)
+                    # Compute autocorrelation
+                    autocorr[dim] = thin*emcee.autocorr.integrated_time(
+                        x_dim, quiet=True)
+            else:
+                autocorr = self.sampler_.get_autocorr_time(
+                    discard=burn, thin=thin, quiet=True)
 
         return autocorr
 
@@ -375,6 +408,29 @@ class BayesianLinearRegressionEmcee(
             thin = self.thin
 
         return len(self.sampler_.get_chain(discard=burn, thin=thin, flat=True))
+
+    def n_components(self, strategy, bw="experimental"):
+        check_is_fitted(self)
+        ts = self.theta_space
+
+        if not ts.include_p:
+            n_comp = ts.p_max
+        elif strategy == "posterior_mean":
+            n_comp = np.max(self.idata_.posterior[ts.names[ts.p_idx]].to_numpy())
+        elif (callable(strategy)
+                or strategy not in self.n_components_default_pe.keys()):
+            theta_hat = point_estimate(
+                self.idata_,
+                strategy,
+                ts.names,
+                skipna=ts.include_p,
+                bw=bw
+            )
+            n_comp = theta_hat[ts.p_idx]
+        else:
+            n_comp = self.n_components_default_pe[strategy]
+
+        return ts.round_p(n_comp)
 
     def get_trace(self, burn=None, thin=None, flat=False):
         check_is_fitted(self)
@@ -428,18 +484,20 @@ class BayesianLinearRegressionEmcee(
     def _compute_mle(self, X, y, n_jobs, rng):
         if self.verbose > 1:
             print("[BFLinReg] Computing MLE...")
-        self._theta_space_fixed = self.theta_space.copy_p_fixed()
+        ts_fixed = self.theta_space.copy_p_fixed()
 
-        self.mle_, _ = compute_mle(
+        mle, _ = compute_mle(
             X,
             y,
-            self._theta_space_fixed,
+            ts_fixed,
             kind='linear',
             method=self.mle_method,
             strategy=self.mle_strategy,
             n_jobs=n_jobs,
             rng=rng
         )
+
+        return mle, ts_fixed
 
     def _emcee_to_idata(self):
         ts = self.theta_space
@@ -522,10 +580,15 @@ class BayesianLinearRegressionEmcee(
         ))
 
         if self.theta_space.include_p:
+            if self.prior_p is not None:
+                prior_p = sorted(self.prior_p.values())
+            else:
+                prior_p = np.full(p, 1./p)
+
             p_init = rng.choice(
                 np.arange(self.theta_space.p_max) + 1,
                 size=n_samples,
-                p=sorted(self.prior_p.values())
+                p=prior_p
             )
 
             init = np.vstack((

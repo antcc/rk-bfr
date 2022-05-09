@@ -92,6 +92,16 @@ def plot_dataset_classification(
     axs[1].legend()
 
 
+def plot_autocorr(idata, theta_space, gridsize):
+    az.plot_autocorr(
+        idata.posterior.dropna(theta_space.coord_name, how="all").fillna(0.0),
+        combined=True,
+        var_names=theta_space.names,
+        grid=gridsize,
+        labeller=theta_space.labeller
+    )
+
+
 def plot_histogram(samples, nrows, ncols, labels, figsize=(10, 10)):
     """Plot histogram of 'samples', which is an ndarray of (nchains, n_dim)."""
     n_dim = samples.shape[-1]
@@ -117,14 +127,14 @@ def plot_histogram(samples, nrows, ncols, labels, figsize=(10, 10)):
         plt.yticks([])
 
 
-def plot_evolution(trace, labels):
+def plot_evolution(trace, names):
     n_dim = trace.shape[-1]
     fig, axes = plt.subplots(n_dim, figsize=(5, 12), sharex=True)
 
     for i in range(n_dim):
         ax = axes[i]
         ax.plot(trace[:, :, i], "k", alpha=0.3)
-        ax.set_ylabel(labels[i])
+        ax.set_ylabel(names[i])
 
     axes[0].set_title("Evolution of parameters for all chains")
     axes[-1].set_xticks([])
