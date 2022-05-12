@@ -315,11 +315,6 @@ class BayesianLinearRegressionEmcee(
                 self.n_components_default_pe[strategy] = theta_hat[ts.p_idx]
 
         elif strategy == 'posterior_mean':
-            if self.verbose > 0:
-                progress = 'notebook' if self.progress_notebook else True
-            else:
-                progress = False
-
             pp_test = generate_pp(
                 self.idata_,
                 X,
@@ -327,7 +322,7 @@ class BayesianLinearRegressionEmcee(
                 self.thin_pp,
                 kind='linear',
                 rng=self.rng_,
-                progress=progress,
+                verbose=self.verbose,
             )
             y_pred = pp_test.mean(axis=(0, 1))
 
@@ -389,7 +384,7 @@ class BayesianLinearRegressionEmcee(
                     # Remove chains where all values are NaN
                     x_dim = x_dim[:, ~np.isnan(x_dim).all(axis=0)]
                     # Replace NaN with 0.0 for computing autocorrelation
-                    x_dim = np.nan_to_num(x_dim)
+                    x_dim = np.nan_to_num(x_dim, nan=0.0)
                     # Compute autocorrelation
                     autocorr[dim] = thin*emcee.autocorr.integrated_time(
                         x_dim, quiet=True)
@@ -433,6 +428,7 @@ class BayesianLinearRegressionEmcee(
         return ts.round_p(n_comp)
 
     def get_trace(self, burn=None, thin=None, flat=False):
+        """Trace is (n_iter, n_walkers, n_dim)."""
         check_is_fitted(self)
 
         if burn is None:
@@ -441,6 +437,7 @@ class BayesianLinearRegressionEmcee(
             thin = self.thin
 
         trace = np.copy(self.sampler_.get_chain(discard=burn, thin=thin))
+        trace = trace.swapaxes(0, 1)  # (chain, draw, n_dim)
 
         if flat:
             trace = trace.reshape(-1, trace.shape[-1])  # All chains combined
@@ -479,7 +476,8 @@ class BayesianLinearRegressionEmcee(
 
         # Set unused values to NaN on each sample
         if ts.include_p:
-            trace = np.apply_along_axis(ts.set_unused_nan, -1, trace)
+            _ = [[[ts.set_unused_nan(theta, inplace=True) for theta in draw]
+                  for draw in trace]]
 
     def _compute_mle(self, X, y, n_jobs, rng):
         if self.verbose > 1:
@@ -586,7 +584,7 @@ class BayesianLinearRegressionEmcee(
                 prior_p = np.full(p, 1./p)
 
             p_init = rng.choice(
-                np.arange(self.theta_space.p_max) + 1,
+                np.arange(p) + 1,
                 size=n_samples,
                 p=prior_p
             )

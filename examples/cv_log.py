@@ -373,8 +373,8 @@ def log_posterior(theta_tr, Y):
     # Compute posterior predictive samples
     if return_pp:
         theta = theta_space.backward(theta_tr)
-        pp_y, pp_p = utils.generate_response_logistic(
-            X, theta, return_p=True, rng=rng)
+        pp_p, pp_y = utils.generate_response_logistic(
+            X, theta, return_prob=True, rng=rng)
 
     # Return information
     if return_pp and return_ll:
@@ -804,7 +804,7 @@ try:
 
                 mle_theta_back = theta_space.backward(mle_theta)
                 Y_hat_mle = utils.generate_response_logistic(
-                    X_test, mle_theta_back, prob=False)
+                    X_test, mle_theta_back, noise=False)
                 metrics_mle = utils.classification_metrics(Y_test, Y_hat_mle)
                 df_metrics_mle.loc[i] = [
                     "mle",

@@ -4,8 +4,6 @@ from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
 from scipy.special import expit
-from tqdm import tqdm
-from tqdm.notebook import tqdm as tqdm_notebook
 from utils import compute_mode_xarray
 
 
@@ -114,6 +112,7 @@ class ThetaSpace():
             include_p=False,
             names=self.names[1:],
             labels=self.labels[1:],
+            coord_name=self.coord_name,
             tau_range=self.tau_range,
             beta_range=self.beta_range,
             tau_ttr=self.tau_ttr,
@@ -170,59 +169,52 @@ class ThetaSpace():
         return theta
 
     def set_unused_nan(self, theta, inplace=True):
-        p = self.round_p(theta[self.p_idx])
+        t = theta.copy() if not inplace else theta
+        pp = self.round_p(t[self.p_idx])
+        t[self.beta_idx[pp:]] = np.nan
+        t[self.tau_idx[pp:]] = np.nan
 
-        if inplace:
-            t = theta
-        else:
-            t = np.copy(theta)
-
-        t[self.beta_idx[p:]] = np.nan
-        t[self.tau_idx[p:]] = np.nan
-
-        return t
+        if not inplace:
+            return t
 
     def clip_bounds(self, theta):
         """'theta' is in the original space."""
         self._check_theta(theta)
 
-        n_dim = len(theta.shape)
         theta_clp = np.copy(theta)
-
-        if n_dim < 2:
-            theta_clp = theta_clp[np.newaxis, :]
+        theta_clp = np.atleast_2d(theta_clp)
 
         # Restrict p
         if self.include_p:
-            theta_clp[:, self.p_idx] = np.clip(
-                theta_clp[:, self.p_idx],
+            theta_clp[..., self.p_idx] = np.clip(
+                theta_clp[..., self.p_idx],
                 1,
                 self.p_max
             )
 
         # Restrict β
         if self.beta_range is not None:
-            theta_clp[:, self.beta_idx] = np.clip(
-                theta_clp[:, self.beta_idx],
+            theta_clp[..., self.beta_idx] = np.clip(
+                theta_clp[..., self.beta_idx],
                 self.beta_range[0],
                 self.beta_range[1]
             )
 
         # Restrict τ
-        theta_clp[:, self.tau_idx] = np.clip(
-            theta_clp[:, self.tau_idx],
+        theta_clp[..., self.tau_idx] = np.clip(
+            theta_clp[..., self.tau_idx],
             self.tau_range[0],
             self.tau_range[1]
         )
 
         # Restrict σ2
-        theta_clp[:, self.sigma2_idx] = np.clip(
-            theta_clp[:, self.sigma2_idx],
+        theta_clp[..., self.sigma2_idx] = np.clip(
+            theta_clp[..., self.sigma2_idx],
             self.eps,
             None
         )
 
-        return theta_clp[0] if n_dim == 1 else theta_clp
+        return theta_clp.squeeze()
 
     def _get_names_ttr(self):
         names = self.names.copy()
@@ -265,11 +257,8 @@ class ThetaSpace():
             )
 
     def _perform_ttr(self, theta, is_forward):
-        n_dim = len(theta.shape)
         theta_tr = np.copy(theta)
-
-        if n_dim < 2:
-            theta_tr = theta_tr[np.newaxis, :]
+        theta_tr = np.atleast_2d(theta_tr)
 
         if is_forward:
             tau_ttr = self.tau_ttr.forward
@@ -278,10 +267,12 @@ class ThetaSpace():
             tau_ttr = self.tau_ttr.backward
             sigma2_ttr = self.sigma2_ttr.backward
 
-        theta_tr[:, self.tau_idx] = tau_ttr(theta_tr[:, self.tau_idx])
-        theta_tr[:, self.sigma2_idx] = sigma2_ttr(theta_tr[:, self.sigma2_idx])
+        theta_tr[..., self.tau_idx] = tau_ttr(
+            theta_tr[..., self.tau_idx])
+        theta_tr[..., self.sigma2_idx] = sigma2_ttr(
+            theta_tr[..., self.sigma2_idx])
 
-        return theta_tr[0] if n_dim == 1 else theta_tr
+        return theta_tr.squeeze()
 
 
 RandomType = Union[
@@ -302,46 +293,43 @@ PriorType = Optional[
 def generate_response_linear(X, theta, theta_space, noise=True, rng=None):
     """Generate a linear response Y given X and θ"""
     theta = np.asarray(theta)
-    p, beta, tau, alpha0, sigma2 = theta_space.get_params(theta)
+    ts = theta_space
 
-    idx = np.abs(theta_space.grid - tau[:, np.newaxis]).argmin(1)
-    y = alpha0 + X[:, idx]@beta
+    if theta.ndim == 1:
+        theta_3d = theta[None, None, :]
+    elif theta.ndim == 2:
+        theta_3d = theta[None, ...]
+    else:
+        theta_3d = theta
+
+    if ts.include_p:
+        # Replace NaN with 0.0 to "turn off" the corresponding coefficients
+        theta_3d = np.nan_to_num(theta_3d, nan=0.0)
+
+    beta = theta_3d[..., ts.beta_idx, None]
+    tau = theta_3d[..., ts.tau_idx, None]
+    alpha0 = theta_3d[..., ts.alpha0_idx, None]
+
+    idx = np.abs(ts.grid - tau).argmin(-1)
+    X_idx = np.moveaxis(X[:, idx], 0, -2)
+    y = alpha0 + (X_idx@beta).squeeze()
 
     if noise:
-        n = X.shape[0]
         if rng is None:
             rng = np.random.default_rng()
 
-        y += np.sqrt(sigma2)*rng.standard_normal(size=n)
+        sigma2 = theta_3d[..., ts.sigma2_idx, None]
+        y += np.sqrt(sigma2)*rng.standard_normal(size=y.shape)
 
-    return y
-
-
-def probability_to_label(y_lin, noise=None, rng=None):
-    """Convert probabilities into class labels with eventual random noise."""
-    if rng is None:
-        rng = np.random.default_rng()
-
-    y = rng.binomial(1, expit(y_lin))
-
-    if noise is not None:
-        n_permute = int(len(y)*noise)
-
-        idx_0 = rng.choice(np.where(y == 0)[0], size=n_permute)
-        idx_1 = rng.choice(np.where(y == 1)[0], size=n_permute)
-
-        y[idx_0] = 1
-        y[idx_1] = 0
-
-    return y
+    return y.squeeze()
 
 
 def generate_response_logistic(
     X,
     theta,
     theta_space,
-    prob=True,
-    return_p=False,
+    noise=True,
+    return_prob=False,
     rng=None
 ):
     """Generate a logistic response Y given X and θ.
@@ -350,20 +338,42 @@ def generate_response_logistic(
     """
     y_lin = generate_response_linear(X, theta, theta_space, noise=False)
 
-    if prob:
+    if noise:
         y = probability_to_label(y_lin, rng=rng)
     else:
         # sigmoid(x) >= 0.5 iff x >= 0
-        y = [1 if yy >= 0 else 0 for yy in y_lin]
+        y = y_lin.copy().astype(int)
+        y[..., y >= 0] = 1
+        y[..., y < 0] = 0
 
-    if return_p:
-        return y, expit(y_lin)
+    if return_prob:
+        return expit(y_lin), y
     else:
         return y
 
 
-# TODO: improve inner for loop and change generate_response so that it can
-# handle multiple thetas and return a matrix of (n_thetas, n)
+def probability_to_label(y_lin, random_noise=None, rng=None):
+    """Convert probabilities into class labels."""
+    if rng is None:
+        rng = np.random.default_rng()
+
+    return rng.binomial(1, expit(y_lin))
+
+
+def apply_label_noise(y, noise_frac=0.05, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+
+    y_noise = y.copy()
+    n_noise = int(len(y)*noise_frac)
+
+    idx_0 = rng.choice(np.where(y == 0)[0], size=n_noise)
+    idx_1 = rng.choice(np.where(y == 1)[0], size=n_noise)
+
+    y_noise[idx_0] = 1
+    y_noise[idx_1] = 0
+
+
 def generate_pp(
         idata,
         X,
@@ -371,53 +381,30 @@ def generate_pp(
         thin=1,
         kind='linear',
         rng=None,
-        progress='notebook'
+        verbose=False
 ):
     if rng is None:
         rng = np.random.default_rng()
 
-    n = X.shape[0]
-    posterior_trace = idata.posterior
-    n_chain = len(posterior_trace["chain"])
-    n_draw = len(posterior_trace["draw"])
-    range_draws = range(0, n_draw, thin)
-    pp_y = np.zeros((n_chain, len(range_draws), n))
+    if verbose:
+        print("Generating posterior predictive samples...")
+
+    theta = idata.posterior.to_stacked_array("", sample_dims=("chain", "draw"))
+
+    # Generate responses following the model
+    if kind == 'logistic':
+        p_star, y_star = generate_response_logistic(
+            X, theta, theta_space, noise=True, return_prob=True, rng=rng
+        )
+    else:
+        y_star = generate_response_linear(
+            X, theta, theta_space, noise=True, rng=rng
+        )
 
     if kind == 'logistic':
-        pp_p = np.zeros((n_chain, len(range_draws), n))
-
-    if progress is True:
-        chain_range = tqdm(
-            range(n_chain), "Posterior predictive samples")
-    elif progress == 'notebook':
-        chain_range = tqdm_notebook(
-            range(n_chain), "Posterior predictive samples")
+        return p_star, y_star
     else:
-        chain_range = range(n_chain)
-
-    for i in chain_range:
-        for j, jj in enumerate(range_draws):
-            theta_ds = posterior_trace[theta_space.names].isel(
-                chain=i, draw=jj).data_vars.values()
-            theta = np.concatenate([param.values.ravel()
-                                    for param in theta_ds])
-
-            if kind == 'logistic':
-                y_star, p_star = generate_response_logistic(
-                    X, theta, theta_space, return_p=True, rng=rng
-                )
-                pp_p[i, j, :] = p_star
-            else:
-                y_star = generate_response_linear(
-                    X, theta, theta_space, rng=rng
-                )
-
-            pp_y[i, j, :] = y_star
-
-    if kind == 'logistic':
-        return pp_p, pp_y.astype(int)
-    else:
-        return pp_y
+        return y_star
 
 
 def point_estimate(idata, estimator_fn, names, skipna=False, bw='experimental'):
@@ -426,33 +413,33 @@ def point_estimate(idata, estimator_fn, names, skipna=False, bw='experimental'):
     posterior_trace = idata.posterior
 
     if callable(estimator_fn):
-        theta_ds = estimator_fn(
+        theta_unstacked = estimator_fn(
             posterior_trace[names],
             dim=("chain", "draw"),
             skipna=skipna
-        ).data_vars.values()
+        )
     elif estimator_fn == 'mean':
-        theta_ds = posterior_trace[names].mean(
+        theta_unstacked = posterior_trace[names].mean(
             dim=("chain", "draw"),
             skipna=skipna
-        ).data_vars.values()
+        )
     elif estimator_fn == 'mode':
-        theta_ds = compute_mode_xarray(
+        theta_unstacked = compute_mode_xarray(
             posterior_trace[names],
             dim=("chain", "draw"),
             skipna=skipna,
             bw=bw
-        ).data_vars.values()
+        )
     elif estimator_fn == 'median':
-        theta_ds = posterior_trace[names].median(
+        theta_unstacked = posterior_trace[names].median(
             dim=("chain", "draw"),
             skipna=skipna
-        ).data_vars.values()
+        )
     else:
         raise ValueError(
             "'estimator_fn' must be a callable or one of {mean, median, mode}.")
 
-    theta = np.concatenate([param.values.ravel() for param in theta_ds])
+    theta = theta_unstacked.to_stacked_array("", sample_dims="").values
 
     return theta
 
@@ -473,7 +460,7 @@ def point_predict(
             X, theta_hat, theta_space, noise=False)
     else:
         y_pred = generate_response_logistic(
-            X, theta_hat, theta_space, prob=False)
+            X, theta_hat, theta_space, noise=False)
 
     return y_pred, theta_hat
 
