@@ -292,8 +292,8 @@ def multiple_linear_regression_cv(
     return df_metrics
 
 
-def run_emcee(
-    reg_emcee,
+def run_bayesian_model(
+    estimator,
     X,
     y,
     X_test,
@@ -301,16 +301,17 @@ def run_emcee(
     folds,
     n_jobs=1,
     sort_by=-2,
+    prefix="emcee",
     compute_metrics=True,
     verbose=False,
     notebook=False,
     random_state=None,
 ):
-    reg_emcee.fit(X, y)
+    estimator.fit(X, y)
 
     if verbose:
-        fit_summary = reg_emcee.summary()
-        print(f"Mean acceptance: {100*reg_emcee.mean_acceptance():.3f}%")
+        fit_summary = estimator.summary()
+        print(f"Mean acceptance: {100*estimator.mean_acceptance():.3f}%")
         if notebook:
             display(fit_summary)
         else:
@@ -322,31 +323,31 @@ def run_emcee(
 
         # -- Compute metrics using several point estimates
 
-        y_pred_pp = reg_emcee.predict(X_test, strategy='posterior_mean')
+        y_pred_pp = estimator.predict(X_test, strategy='posterior_mean')
         df_metrics = linear_regression_metrics(
             y_test,
             y_pred_pp,
-            reg_emcee.n_components("posterior_mean"),
-            "emcee_posterior_mean",
+            estimator.n_components("posterior_mean"),
+            prefix + "_posterior_mean",
             sort_by=sort_by
         )
 
-        for pe in reg_emcee.default_point_estimates:
-            y_pred_pe = reg_emcee.predict(X_test, strategy=pe)
+        for pe in estimator.default_point_estimates:
+            y_pred_pe = estimator.predict(X_test, strategy=pe)
             df_metrics = linear_regression_metrics(
                 y_test,
                 y_pred_pe,
-                reg_emcee.n_components(pe),
-                "emcee_" + pe,
+                estimator.n_components(pe),
+                prefix + "_" + pe,
                 df=df_metrics,
                 sort_by=sort_by
             )
 
         # -- Bayesian variable selection
 
-        for pe in reg_emcee.default_point_estimates:
-            X_red = reg_emcee.transform(X, pe=pe)
-            X_test_red = reg_emcee.transform(X_test, pe=pe)
+        for pe in estimator.default_point_estimates:
+            X_red = estimator.transform(X, pe=pe)
+            X_test_red = estimator.transform(X_test, pe=pe)
 
             df_metrics = multiple_linear_regression_cv(
                 X_red,
@@ -355,7 +356,7 @@ def run_emcee(
                 y_test,
                 folds,
                 n_jobs=n_jobs,
-                prefix="emcee",
+                prefix=prefix,
                 pe=pe,
                 df=df_metrics,
                 sort_by=sort_by,

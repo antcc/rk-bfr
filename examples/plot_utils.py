@@ -94,11 +94,23 @@ def plot_dataset_classification(
 
 def plot_autocorr(idata, theta_space, gridsize):
     az.plot_autocorr(
-        idata.posterior.dropna(theta_space.coord_name, how="all").fillna(0.0),
+        idata.posterior.dropna(theta_space.dim_name, how="all").fillna(0.0),
         combined=True,
         var_names=theta_space.names,
         grid=gridsize,
         labeller=theta_space.labeller
+    )
+
+
+def plot_posterior(idata, theta_space, gridsize, textsize, pe='mode'):
+    az.plot_posterior(
+        idata.posterior.dropna(theta_space.dim_name, how="all"),
+        labeller=theta_space.labeller,
+        point_estimate=pe,
+        grid=gridsize,
+        textsize=textsize,
+        skipna=theta_space.include_p,
+        var_names=theta_space.names
     )
 
 

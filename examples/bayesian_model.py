@@ -1,8 +1,10 @@
 # encoding: utf-8
 
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Union
 
 import numpy as np
+import pymc3 as pm
+import theano.tensor as tt
 from scipy.special import expit
 from utils import compute_mode_xarray
 
@@ -54,7 +56,7 @@ class ThetaSpace():
         names=[],
         labels=[],
         labeller=None,
-        coord_name="vector",
+        dim_name="theta",
         tau_range=(0, 1),
         beta_range=None,
         tau_ttr=Identity(),
@@ -71,7 +73,7 @@ class ThetaSpace():
         self.names = names
         self.labels = labels
         self.labeller = labeller
-        self.coord_name = coord_name
+        self.dim_name = dim_name
         self.tau_range = tau_range
         self.beta_range = beta_range
         self.tau_ttr = tau_ttr
@@ -112,7 +114,7 @@ class ThetaSpace():
             include_p=False,
             names=self.names[1:],
             labels=self.labels[1:],
-            coord_name=self.coord_name,
+            dim_name=self.dim_name,
             tau_range=self.tau_range,
             beta_range=self.beta_range,
             tau_ttr=self.tau_ttr,
@@ -282,11 +284,10 @@ RandomType = Union[
     None
 ]
 
-PriorType = Optional[
-    Callable[
-        [np.ndarray, np.ndarray, np.ndarray, ThetaSpace, Any],
-        float
-    ]
+PriorType = Callable[
+    # theta, X, y, theta_space, **kwargs
+    [np.ndarray, np.ndarray, np.ndarray, ThetaSpace, Any],
+    float
 ]
 
 
@@ -389,7 +390,8 @@ def generate_pp(
     if verbose:
         print("Generating posterior predictive samples...")
 
-    theta = idata.posterior.to_stacked_array("", sample_dims=("chain", "draw"))
+    theta = idata.posterior[theta_space.names].to_stacked_array(
+        "", sample_dims=("chain", "draw"))
 
     # Generate responses following the model
     if kind == 'logistic':
@@ -553,7 +555,7 @@ def log_posterior_linear(
     rng: RandomType = None,
     return_pp: bool = False,
     return_ll: bool = False,
-    prior_kwargs: Optional[Dict] = None,
+    prior_kwargs: Dict = {},
 ):
     if rng is None:
         rng = np.random.default_rng()
@@ -632,3 +634,71 @@ def neg_ll_linear(*args, **kwargs):
 
 def neg_ll_logistic(*args, **kwargs):
     pass
+
+#####
+
+
+def make_model_linear_pymc(
+    X,
+    y,
+    theta_space,
+    *,
+    b0,
+    g,
+    eta,
+    prior_p=None,
+):
+    n, N = X.shape
+    ts = theta_space
+    p_max = theta_space.p_max
+
+    with pm.Model() as model:
+        X_pm = pm.Data('X_obs', X)
+
+        if ts.include_p:
+            p_cat = pm.Categorical('p_cat', p=list(prior_p.values()))
+            p = pm.Deterministic(ts.names[ts.p_idx], p_cat + 1)
+        else:
+            p = p_max
+
+        alpha0_and_log_sigma = pm.DensityDist(
+            ts.names[ts.alpha0_idx] + "_and_" + ts.names_ttr[ts.sigma2_idx],
+            logp=lambda x: 0,
+            shape=(2,)
+        )
+
+        alpha0 = pm.Deterministic(
+            ts.names[ts.alpha0_idx], alpha0_and_log_sigma[0])
+
+        log_sigma = alpha0_and_log_sigma[1]
+        sigma = pm.math.exp(log_sigma)
+        sigma2 = pm.Deterministic(ts.names[ts.sigma2_idx], sigma**2)
+
+        tau = pm.Uniform(ts.names[ts.tau_idx_grouped], 0.0, 1.0, shape=(p_max,))
+        tau_red = tau[:p]
+
+        idx = np.abs(ts.grid - tau_red[:, np.newaxis]).argmin(1)
+        X_tau = X_pm[:, idx]
+
+        G_tau = pm.math.matrix_dot(X_tau.T, X_tau)
+        G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
+        G_tau_reg = G_tau + eta * \
+            tt.max(tt.nlinalg.eigh(G_tau)[0])*tt.eye(p)
+        G_log_det = pm.math.logdet(G_tau_reg)
+
+        def beta_lprior(value):
+            b = (value - b0)[:p]
+
+            return (0.5*G_log_det
+                    - p*log_sigma
+                    - pm.math.matrix_dot(b.T, G_tau_reg, b)/(2.*g*sigma2))
+
+        beta = pm.DensityDist(
+            ts.names[ts.beta_idx_grouped], logp=beta_lprior, shape=(p_max,))
+        beta_red = beta[:p]
+
+        expected_obs = alpha0 + pm.math.matrix_dot(X_tau, beta_red)
+
+        y_obs = pm.Normal('y_obs', mu=expected_obs, sigma=sigma, observed=y)
+
+    return model

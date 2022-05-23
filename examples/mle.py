@@ -121,4 +121,4 @@ def compute_bic(theta_space, neg_ll, mles, X, y):
                      + 2*neg_ll(mle_theta, X, y, theta_space)
                      for mle_theta in mles])
 
-    return bics[0] if len(mles) == 1 else bics
+    return bics
