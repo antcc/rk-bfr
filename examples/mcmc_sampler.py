@@ -239,8 +239,7 @@ class BayesianLinearRegression(
         if isinstance(self.b0, str):
             if self.b0 == 'mle':
                 if self.mle_ is None:
-                    self.mle_, self._theta_space_fixed = \
-                        self._compute_mle(X, y, self.rng_)
+                    self.mle_, self._theta_space_fixed = self._compute_mle(X, y)
                 b0 = self.mle_[self._theta_space_fixed.beta_idx]
             elif self.b0 == 'random':
                 b0 = self.rng_.normal(
@@ -321,7 +320,7 @@ class BayesianLinearRegression(
 
         return X_red
 
-    def _compute_mle(self, X, y, rng):
+    def _compute_mle(self, X, y):
         if self.verbose > 1:
             print("[BFLinReg] Computing MLE...")
         ts_fixed = self.theta_space.copy_p_fixed()
@@ -334,7 +333,7 @@ class BayesianLinearRegression(
             method=self.mle_method,
             strategy=self.mle_strategy,
             n_jobs=self.n_jobs_,
-            rng=rng
+            rng=self.rng_
         )
 
         return mle, ts_fixed
@@ -373,178 +372,6 @@ class BayesianLinearRegression(
         return X, y
 
 
-class BayesianLinearRegressionPymc(BayesianLinearRegression):
-    """Bayesian functional linear regression.
-
-    It uses 'pymc' as the underlying MCMC algorithm for
-    approximating the posterior distribution.
-
-    See [REFERENCE].
-    """
-
-    def __init__(
-        self,
-        theta_space: ThetaSpace = ThetaSpace(),
-        n_walkers: int = 2,
-        n_iter: int = 1000,
-        *,
-        model_fn: Optional[ModelType] = None,
-        model_kwargs: Dict = {},
-        b0: Union[str, np.ndarray] = 'mle',
-        g: float = 5.0,
-        eta: float = 1.0,
-        prior_p: Optional[Dict] = None,
-        step_fn: Optional[StepType] = None,
-        step_kwargs: Dict = {},
-        n_iter_warmup: int = 1000,
-        thin: int = 1,
-        thin_pp: int = 5,
-        burn: int = 100,
-        mle_method: str = 'L-BFGS-B',
-        mle_strategy: str = 'global',
-        n_jobs: int = 1,
-        verbose: int = 0,
-        random_state: RandomType = None
-    ) -> BayesianLinearRegressionPymc:
-        self.theta_space = theta_space
-        self.n_walkers = n_walkers
-        self.n_iter = n_iter
-        self.model_fn = model_fn
-        self.model_kwargs = model_kwargs
-        self.b0 = b0
-        self.g = g
-        self.eta = eta
-        self.prior_p = prior_p
-        self.step_fn = step_fn
-        self.step_kwargs = step_kwargs
-        self.n_iter_warmup = n_iter_warmup
-        self.thin = thin
-        self.thin_pp = thin_pp
-        self.burn = burn
-        self.mle_method = mle_method
-        self.mle_strategy = mle_strategy
-        self.n_jobs = n_jobs
-        self.verbose = verbose
-        self.random_state = random_state
-
-    def fit(
-        self,
-        X: DataType,
-        y: np.ndarray
-    ) -> BayesianLinearRegressionPymc:
-        X, y = self._argcheck_X_y(X, y)
-        super().fit(X, y)
-        ts = self.theta_space
-
-        # Model creation
-
-        if self.model_fn is None:
-            model_kwargs = self._get_prior_kwargs(X, y)
-            self.model_ = make_model_linear_pymc(X, y, ts, **model_kwargs)
-
-        elif callable(self.model_fn):
-            self.model_ = self.model_fn(X, y, ts, **self.model_kwargs)
-        else:
-            raise ValueError("Invalid value for log_prior.")
-
-        # Set dimension names
-
-        dims = {f"{ts.names[ts.beta_idx_grouped]}": [ts.dim_name],
-                f"{ts.names[ts.tau_idx_grouped]}": [ts.dim_name],
-                "X_obs": ["observation", "value"],
-                "y_obs": ["observation"]}
-
-        # Select samplers
-
-        if self.step_fn is None:
-            step = None
-        else:
-            with self.model_:
-                step = [self.step_fn(self.model_.cont_vars, **self.step_kwargs)]
-                if ts.include_p:
-                    step.append(
-                        pm.CategoricalGibbsMetropolis(self.model_.disc_vars)
-                    )
-
-        # Select random seeds
-
-        seed = [self.rng_.integers(2**32) for _ in range(self.n_walkers)]
-
-        # Select initial points
-
-        if ts.include_p:
-            start = [{'p_cat': i % ts.p_max} for i in range(self.n_walkers)]
-        else:
-            start = None
-
-        # Run MCMC procedure
-
-        with self.model_:
-            idata = pm.sample(
-                self.n_iter,
-                cores=self.n_jobs_,
-                chains=self.n_walkers,
-                start=start,
-                tune=self.n_iter_warmup,
-                step=step,
-                random_seed=seed,
-                return_inferencedata=True,
-                progressbar=self.verbose > 0,
-                idata_kwargs={"dims": dims}
-            )
-
-            # Retain only relevant information
-            idata.posterior = idata.posterior[ts.names]
-            attrs = idata.posterior.attrs
-            trace = idata.posterior.to_stacked_array(
-                new_dim="stack",
-                sample_dims=("chain", "draw")
-            )
-            if ts.include_p:
-                self._discard_components(trace.values)
-            idata.posterior = trace.to_unstacked_dataset(dim="stack")[ts.names]
-            idata.posterior.attrs = attrs
-
-            # Get data (after burn-in and thinning)
-            self.burn_ = np.minimum(self.burn, self.n_iter//10)
-            idata = self._tidy_idata(idata)
-
-            # Save trace
-            self.idata_ = idata
-            self._trace = trace.values
-
-        return self
-
-    def mean_acceptance(self):
-        check_is_fitted(self)
-
-        stats = self.idata_.sample_stats
-        if "acceptance_rate" in stats:
-            return stats.acceptance_rate.mean().values
-        elif "accepted" in stats:
-            return stats.accepted.mean().values
-        else:
-            warnings.warn("The sampler does not provide acceptance stats.")
-            return np.nan
-
-    def get_trace(self, burn=None, thin=None, flat=False):
-        check_is_fitted(self)
-        if burn is None:
-            burn = self.burn_
-        if thin is None:
-            thin = self.thin
-
-        trace = np.copy(self._trace[:, burn::thin, :])
-
-        if flat:
-            trace = trace.reshape(-1, trace.shape[-1])
-
-        return trace
-
-    def to_graphviz(self):
-        return pm.model_graph.model_to_graphviz(self.model_)
-
-
 class BayesianLinearRegressionEmcee(BayesianLinearRegression):
     """Bayesian functional linear regression.
 
@@ -574,7 +401,7 @@ class BayesianLinearRegressionEmcee(BayesianLinearRegression):
         n_iter_warmup: int = 100,
         initial_state: Union[str, np.ndarray] = 'mle',
         frac_random: float = 0.3,
-        moves: Optional[Sequence[emcee.Move]] = None,
+        moves: Optional[Sequence[emcee.moves.Move]] = None,
         compute_pp: bool = False,
         compute_ll: bool = False,
         thin: int = 1,
@@ -622,6 +449,7 @@ class BayesianLinearRegressionEmcee(BayesianLinearRegression):
         y: np.ndarray
     ) -> BayesianLinearRegressionEmcee:
         X, y = self._argcheck_X_y(X, y)
+        self.n_features_in_ = X.shape[1]
         super().fit(X, y)
         ts = self.theta_space
 
@@ -652,8 +480,7 @@ class BayesianLinearRegressionEmcee(BayesianLinearRegression):
         if isinstance(self.initial_state, str):
             if self.initial_state == 'mle':
                 if self.mle_ is None:
-                    self.mle_, self._theta_space_fixed = \
-                        self._compute_mle(X, y, self.rng_)
+                    self.mle_, self._theta_space_fixed = self._compute_mle(X, y)
                 n_random = int(self.frac_random*self.n_walkers)
                 n_around = self.n_walkers - n_random
                 initial_state = self._weighted_initial_guess_around_value(
@@ -928,3 +755,177 @@ class BayesianLinearRegressionEmcee(BayesianLinearRegression):
         self.rng_.shuffle(init)
 
         return init
+
+
+class BayesianLinearRegressionPymc(BayesianLinearRegression):
+    """Bayesian functional linear regression.
+
+    It uses 'pymc' as the underlying MCMC algorithm for
+    approximating the posterior distribution.
+
+    See [REFERENCE].
+    """
+
+    def __init__(
+        self,
+        theta_space: ThetaSpace = ThetaSpace(),
+        n_walkers: int = 2,
+        n_iter: int = 1000,
+        *,
+        model_fn: Optional[ModelType] = None,
+        model_kwargs: Dict = {},
+        b0: Union[str, np.ndarray] = 'mle',
+        g: float = 5.0,
+        eta: float = 1.0,
+        prior_p: Optional[Dict] = None,
+        step_fn: Optional[StepType] = None,
+        step_kwargs: Dict = {},
+        n_iter_warmup: int = 1000,
+        thin: int = 1,
+        thin_pp: int = 5,
+        burn: int = 0,
+        mle_method: str = 'L-BFGS-B',
+        mle_strategy: str = 'global',
+        n_jobs: int = 1,
+        verbose: int = 0,
+        random_state: RandomType = None
+    ) -> BayesianLinearRegressionPymc:
+        self.theta_space = theta_space
+        self.n_walkers = n_walkers
+        self.n_iter = n_iter
+        self.model_fn = model_fn
+        self.model_kwargs = model_kwargs
+        self.b0 = b0
+        self.g = g
+        self.eta = eta
+        self.prior_p = prior_p
+        self.step_fn = step_fn
+        self.step_kwargs = step_kwargs
+        self.n_iter_warmup = n_iter_warmup
+        self.thin = thin
+        self.thin_pp = thin_pp
+        self.burn = burn
+        self.mle_method = mle_method
+        self.mle_strategy = mle_strategy
+        self.n_jobs = n_jobs
+        self.verbose = verbose
+        self.random_state = random_state
+
+    def fit(
+        self,
+        X: DataType,
+        y: np.ndarray
+    ) -> BayesianLinearRegressionPymc:
+        X, y = self._argcheck_X_y(X, y)
+        self.n_features_in_ = X.shape[1]
+        super().fit(X, y)
+        ts = self.theta_space
+
+        # Model creation
+
+        if self.model_fn is None:
+            model_kwargs = self._get_prior_kwargs(X, y)
+            self.model_ = make_model_linear_pymc(X, y, ts, **model_kwargs)
+
+        elif callable(self.model_fn):
+            self.model_ = self.model_fn(X, y, ts, **self.model_kwargs)
+        else:
+            raise ValueError("Invalid value for log_prior.")
+
+        # Set dimension names
+
+        dims = {f"{ts.names[ts.beta_idx_grouped]}": [ts.dim_name],
+                f"{ts.names[ts.tau_idx_grouped]}": [ts.dim_name],
+                "X_obs": ["observation", "value"],
+                "y_obs": ["observation"]}
+
+        # Select samplers
+
+        if self.step_fn is None:
+            step = None
+        else:
+            with self.model_:
+                step = [self.step_fn(self.model_.cont_vars, **self.step_kwargs)]
+                if ts.include_p:
+                    step.append(
+                        pm.CategoricalGibbsMetropolis(self.model_.disc_vars)
+                    )
+
+        # Select random seeds
+
+        seed = [self.rng_.integers(2**32) for _ in range(self.n_walkers)]
+
+        # Select initial points
+
+        if ts.include_p:
+            start = [{'p_cat': i % ts.p_max} for i in range(self.n_walkers)]
+        else:
+            start = None
+
+        # Run MCMC procedure
+
+        with self.model_:
+            with utils.HandleLogger(self.verbose):
+                idata = pm.sample(
+                    self.n_iter,
+                    cores=self.n_jobs_,
+                    chains=self.n_walkers,
+                    start=start,
+                    tune=self.n_iter_warmup,
+                    step=step,
+                    random_seed=seed,
+                    return_inferencedata=True,
+                    progressbar=self.verbose > 0,
+                    idata_kwargs={"dims": dims}
+                )
+
+            # Retain only relevant information
+            idata.posterior = idata.posterior[ts.names]
+            attrs = idata.posterior.attrs
+            trace = idata.posterior.to_stacked_array(
+                new_dim="stack",
+                sample_dims=("chain", "draw")
+            )
+            if ts.include_p:
+                self._discard_components(trace.values)
+            idata.posterior = trace.to_unstacked_dataset(dim="stack")[ts.names]
+            idata.posterior.attrs = attrs
+
+            # Get data (after burn-in and thinning)
+            self.burn_ = np.minimum(self.burn, self.n_iter//10)
+            idata = self._tidy_idata(idata)
+
+            # Save trace
+            self.idata_ = idata
+            self._trace = trace.values
+
+        return self
+
+    def mean_acceptance(self):
+        check_is_fitted(self)
+
+        stats = self.idata_.sample_stats
+        if "acceptance_rate" in stats:
+            return stats.acceptance_rate.mean().values
+        elif "accepted" in stats:
+            return stats.accepted.mean().values
+        else:
+            warnings.warn("The sampler does not provide acceptance stats.")
+            return np.nan
+
+    def get_trace(self, burn=None, thin=None, flat=False):
+        check_is_fitted(self)
+        if burn is None:
+            burn = self.burn_
+        if thin is None:
+            thin = self.thin
+
+        trace = np.copy(self._trace[:, burn::thin, :])
+
+        if flat:
+            trace = trace.reshape(-1, trace.shape[-1])
+
+        return trace
+
+    def to_graphviz(self):
+        return pm.model_graph.model_to_graphviz(self.model_)

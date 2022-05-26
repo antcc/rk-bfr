@@ -1,12 +1,13 @@
 import numpy as np
-
-import utils
-
 from skfda.preprocessing.smoothing.validation import (
-    SmoothingParameterSearch,
-    LinearSmootherGeneralizedCVScorer,
-    akaike_information_criterion
-)
+    LinearSmootherGeneralizedCVScorer, SmoothingParameterSearch,
+    akaike_information_criterion)
+from utils import IgnoreWarnings
+
+
+def normalize_grid(grid, low=0, high=1):
+    g_min, g_max = np.min(grid), np.max(grid)
+    return (grid - g_min)/(g_max - g_min)
 
 
 def smooth_data(X, smoother, params, X_test=None):
@@ -18,7 +19,7 @@ def smooth_data(X, smoother, params, X_test=None):
         n_jobs=-1,
     )
 
-    with utils.IgnoreWarnings():
+    with IgnoreWarnings():
         best_smoother.fit(X)
 
     X_tr = best_smoother.transform(X)

@@ -1,28 +1,9 @@
-import os
-
 import numpy as np
 from skfda.representation.basis import Fourier
 from skfda.representation.grid import FDataGrid
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.utils.validation import check_is_fitted
-
-
-# Custom context manager for handling warnings
-
-class IgnoreWarnings():
-    key = "PYTHONWARNINGS"
-
-    def __enter__(self):
-        if self.key in os.environ:
-            self.state = os.environ["PYTHONWARNINGS"]
-        else:
-            self.state = "default"
-        os.environ["PYTHONWARNINGS"] = "ignore"
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_tb):
-        os.environ["PYTHONWARNINGS"] = self.state
 
 
 # -- Sklearn CV and transformers

@@ -124,7 +124,7 @@ class ThetaSpace():
     def round_p(self, p):
         return np.rint(p).astype(int)
 
-    def get_params(self, theta, transform=None, clip=True):
+    def slice_params(self, theta, transform=None, clip=True):
         self._check_theta(theta)
 
         if transform is not None:
@@ -495,7 +495,7 @@ def log_prior_linear(
     prior_p=None
 ):
     p, beta_full, tau_full, alpha0, sigma2 = \
-        theta_space.get_params(theta_tr, transform='backward', clip=False)
+        theta_space.slice_params(theta_tr, transform='backward', clip=False)
 
     # Check bounds on parameters
     if theta_space.include_p:
@@ -608,7 +608,7 @@ def log_likelihood_linear(
 ):
     n = X.shape[0]
     p, beta, tau, alpha0, sigma2 = \
-        theta_space.get_params(theta_tr, transform='backward')
+        theta_space.slice_params(theta_tr, transform='backward')
 
     idx = np.abs(theta_space.grid - tau[:, np.newaxis]).argmin(1)
     X_tau = X[:, idx]

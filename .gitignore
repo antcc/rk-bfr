@@ -10,7 +10,7 @@ _*.txt
 # Ignore results files
 *.results
 *results.html
-examples/out/*
+examples/out*/*
 
 # Ignore helper files
 graphs.ipynb

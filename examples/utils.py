@@ -5,12 +5,11 @@ import numbers
 import os
 import warnings
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import xarray as xr
 from _fpls import APLS, FPLS
-from arviz import kde, make_ufunc
+from arviz import concat, convert_to_inference_data, kde, make_ufunc
 from IPython.display import display
 from scipy.stats import mode
 from skfda.ml.regression import KNeighborsRegressor
@@ -27,6 +26,23 @@ from sklearn.pipeline import Pipeline
 from sklearn.svm import SVR
 from sklearn_utils import (Basis, DataMatrix, FeatureSelector,
                            PLSRegressionWrapper)
+
+
+# Custom context managers for handling warnings
+
+class IgnoreWarnings():
+    key = "PYTHONWARNINGS"
+
+    def __enter__(self):
+        if self.key in os.environ:
+            self.state = os.environ["PYTHONWARNINGS"]
+        else:
+            self.state = "default"
+        os.environ["PYTHONWARNINGS"] = "ignore"
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        os.environ["PYTHONWARNINGS"] = self.state
 
 
 class HandleLogger():
@@ -69,28 +85,6 @@ def check_random_state(seed):
     )
 
 
-# Custom context manager for handling warnings
-
-class IgnoreWarnings():
-    key = "PYTHONWARNINGS"
-
-    def __enter__(self):
-        if self.key in os.environ:
-            self.state = os.environ["PYTHONWARNINGS"]
-        else:
-            self.state = "default"
-        os.environ["PYTHONWARNINGS"] = "ignore"
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_tb):
-        os.environ["PYTHONWARNINGS"] = self.state
-
-
-def normalize_grid(grid, low=0, high=1):
-    g_min, g_max = np.min(grid), np.max(grid)
-    return (grid - g_min)/(g_max - g_min)
-
-
 def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
     """All the pp arrays must have the same shape (the shape of y_obs)."""
     dim_name = "prediction"
@@ -101,7 +95,7 @@ def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
     for pp, var_name in zip(pps, var_names):
         data_vars[var_name] = (("chain", "draw", dim_name), pp)
 
-    idata_pp = az.convert_to_inference_data(
+    idata_pp = convert_to_inference_data(
         xr.Dataset(data_vars=data_vars, coords=coords),
         group="posterior_predictive",
     )
@@ -110,15 +104,15 @@ def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
         idata.extend(idata_pp)
     else:
         if y_obs is None:
-            idata_aux = az.convert_to_inference_data(
+            idata_aux = convert_to_inference_data(
                 idata.observed_data, group="observed_data")
         else:
-            idata_aux = az.convert_to_inference_data(
+            idata_aux = convert_to_inference_data(
                 xr.Dataset(data_vars={"y_obs": ("observation", y_obs)},
                            coords=coords),
                 group="observed_data")
 
-        az.concat(idata_pp, idata_aux, inplace=True)
+        concat(idata_pp, idata_aux, inplace=True)
 
         return idata_pp
 
@@ -174,6 +168,22 @@ def linear_regression_metrics(
     df.sort_values(df.columns[sort_by], inplace=True)
 
     return df
+
+
+def bayesian_variable_selection_predict(
+    X_train,
+    y_train,
+    X_test,
+    pe,
+    reg_bayesian,
+    reg_linear
+):
+    X_train_red = reg_bayesian.transform(X_train, pe=pe)
+    X_test_red = reg_bayesian.transform(X_test, pe=pe)
+    reg_linear.fit(X_train_red, y_train)
+    y_pred = reg_linear.predict(X_test_red)
+
+    return y_pred
 
 
 def cv_sk(
