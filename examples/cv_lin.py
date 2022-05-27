@@ -48,6 +48,8 @@ RUN_REF_ALGS = True
 VERBOSE = True
 PRINT_TO_FILE = False
 SAVE_RESULTS = True
+PRINT_PATH = "./"
+SAVE_PATH = "./out/"
 
 
 ###################################################################
@@ -777,7 +779,7 @@ def main():
 
     if PRINT_TO_FILE:
         print(f"\nSaving results to file '{filename}'")
-        f = open(filename + ".results", 'w')
+        f = open(PRINT_PATH + filename + ".results", 'w')
         sys.stdout = f  # Change the standard output to the file we created
 
     print("\n--> Bayesian Functional Linear Regression <--\n")
@@ -851,25 +853,25 @@ def main():
                 axis=0,
                 ignore_index=True
             )
-            df.to_csv("out/" + filename + ".csv", index=False)
+            df.to_csv(SAVE_PATH + filename + ".csv", index=False)
 
             # Save the mean CV results to disk
             np.save(
-                "out/" + filename + "_bayesian_all.npy",
+                SAVE_PATH + filename + "_bayesian_all.npy",
                 mse_bayesian_all
             )
             np.save(
-                "out/" + filename + "_var_sel_all.npy",
+                SAVE_PATH + filename + "_var_sel_all.npy",
                 mse_var_sel_all
             )
 
             # Save the strategy statistics to disk
             np.save(
-                "out/strategy/" + filename + "_bayesian_strategy.npy",
+                SAVE_PATH + filename + "_bayesian_strategy.npy",
                 dict(bayesian_strategy_count)
             )
             np.save(
-                "out/strategy/" + filename + "_var_sel_strategy.npy",
+                SAVE_PATH + filename + "_var_sel_strategy.npy",
                 dict(var_sel_strategy_count)
             )
     except Exception as ex:
