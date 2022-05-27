@@ -1,21 +1,21 @@
 # Ignore virtual environment files
-venv*
+*venv*
 __pycache__
 
 # Ignore temp files
 _*.md
 _*.txt
 *TEMP*
+*temp*
 
 # Ignore results files
-*.results
-*results.html
-examples/out*/*
-examples/results/*
+results*/*
+html/
 
 # Ignore helper files
 graphs.ipynb
 test.py
+temp.py
 
 # Ignore pickled files
 *.mcmc
