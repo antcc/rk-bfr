@@ -10,7 +10,11 @@ import pandas as pd
 import xarray as xr
 from _fpls import APLS, FPLS
 from arviz import concat, convert_to_inference_data, kde, make_ufunc
-from IPython.display import display
+
+try:
+    from IPython.display import display
+except ImportError:
+    pass
 from scipy.stats import mode
 from skfda.ml.regression import KNeighborsRegressor
 from skfda.ml.regression import LinearRegression as FLinearRegression
@@ -26,7 +30,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.svm import SVR
 from sklearn_utils import (Basis, DataMatrix, FeatureSelector,
                            PLSRegressionWrapper)
-
 
 # Custom context managers for handling warnings
 
