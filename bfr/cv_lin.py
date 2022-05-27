@@ -44,7 +44,7 @@ pd.set_option("display.precision", 3)
 pd.set_option('display.max_columns', 80)
 
 # Script behavior
-RUN_REF_ALGS = True
+RUN_REF_ALGS = False
 VERBOSE = True
 PRINT_TO_FILE = False
 SAVE_RESULTS = True
@@ -97,22 +97,38 @@ def get_arg_parser():
         "-c", "--n-cores", type=int, default=1,
         help="number of cores for paralellization (-1 to use all)")
     parser.add_argument(
-        "-n", "--n-reps", type=int, default=1,
+        "-r", "--n-reps", type=int, default=1,
         help="number of random train/test splits for robustness")
+    parser.add_argument(
+        "-k", "--n-folds", type=int, default=2,
+        help="number of folds for CV in hyperparameter tuning"
+    )
 
     # Optional dataset arguments
     parser.add_argument(
+        "-n", "--n-samples", type=int, default=150,
+        help="number of functional samples"
+    )
+    parser.add_argument(
+        "-N", "--n-grid", type=int, default=100,
+        help="number of grid points for functional regressors"
+    )
+    parser.add_argument(
         "--smoothing", action="store_true",
-        help="smooth functional data as part of preprocessing")
+        help="smooth functional data as part of preprocessing"
+    )
+    parser.add_argument(
+        "--train-size", type=float, default=0.7,
+        help="fraction of data used for training"
+    )
 
     # Optional MCMC arguments
-
     parser.add_argument(
         "--n-walkers", type=int, default=4,
         help="number of independent chains in MCMC algorithm"
     )
     parser.add_argument(
-        "--n-iter", type=int, default=1000,
+        "--n-iter", type=int, default=100,
         help="number of iterations in MCMC algorithm"
     )
     parser.add_argument(
@@ -123,6 +139,10 @@ def get_arg_parser():
         "--eta-range", type=int, metavar=("ETA_MIN", "ETA_MAX"),
         nargs=2, default=[-1, 1],
         help="range of the parameter η (in logarithmic space)"
+    )
+    parser.add_argument(
+        "--g", type=float, default=5.0,
+        help="value of the parameter g"
     )
 
     # Optional arguments for emcee sampler
@@ -277,9 +297,9 @@ def get_data(
 # MODEL FUNCTIONS
 ###################################################################
 
-def get_reference_models(X, y, n_grid, seed):
+def get_reference_models(X, y, seed):
     alphas = np.logspace(-4, 4, 20)
-    n_selected = [5, 10, 15, 20, 25, n_grid]
+    n_selected = [5, 10, 15, 20, 25, len(X.grid_points[0])]
     n_components = [2, 3, 4, 5, 10]
     n_basis_bsplines = [8, 10, 12, 14, 16]
     n_basis_fourier = [3, 5, 7, 9, 11]
@@ -496,19 +516,15 @@ def main():
     rng = np.random.default_rng(seed)
 
     # Dataset generation parameters
-    n_samples = 150
-    n_grid = 100
     tau_range = (0, 1)
     beta_coef = simulation.cholaquidis_scenario3
-    train_size = 0.7
-    n_folds = 5
-    cv_folds = KFold(n_folds, shuffle=True, random_state=seed)
+    cv_folds = KFold(args.n_folds, shuffle=True, random_state=seed)
 
     # Decide if p is an hyperparameter or part of the model
     include_p = args.p_prior is not None
 
     # Main hyperparameters
-    g = 5.0
+    g = args.g
     etas = [10**i for i in range(args.eta_range[0], args.eta_range[1] + 1)]
     params_cv = [etas]
     params_cv_names = ["eta"]
@@ -576,8 +592,8 @@ def main():
     X_fd, y, grid = get_data(
         is_simulated_data,
         model_type,
-        n_samples,
-        n_grid,
+        args.n_samples,
+        args.n_grid,
         kernel_fn=kernel_fn,
         beta_coef=beta_coef,
         initial_smoothing=args.smoothing,
@@ -617,7 +633,7 @@ def main():
         for rep in range(args.n_reps):
             # Train/test split
             X_train, X_test, y_train, y_test = train_test_split(
-                X_fd, y, train_size=train_size, random_state=seed + rep)
+                X_fd, y, train_size=args.train_size, random_state=seed + rep)
 
             # Standardize data
             X_train, X_test = preprocessing.standardize_predictors(
@@ -631,8 +647,7 @@ def main():
                 start = time.time()
 
                 # Get reference models
-                reg_ref = get_reference_models(
-                    X_train, y_train, n_grid, seed + rep)
+                reg_ref = get_reference_models(X_train, y_train, seed + rep)
 
                 if VERBOSE:
                     print(f"(It. {rep + 1}/{args.n_reps}) "
@@ -726,8 +741,10 @@ def main():
                 reg_linear)
 
             # Save mse of best models
-            mse_bayesian_best[rep] = mean_squared_error(y_test, y_pred_bayesian)
-            mse_var_sel_best[rep] = mean_squared_error(y_test, y_pred_var_sel)
+            mse_bayesian_best[rep] = mean_squared_error(
+                y_test, y_pred_bayesian)
+            mse_var_sel_best[rep] = mean_squared_error(
+                y_test, y_pred_var_sel)
 
             exec_times[rep, 1] = time.time() - start
 
@@ -777,21 +794,29 @@ def main():
         data_name = args.data_name
     smoothing = "_smoothing" if args.smoothing else ""
 
-    filename = ("reg_" + args.method + "_" + data_name
-                + smoothing + "_seed_" + str(seed))
+    filename = ("reg_" + args.method + "_" + data_name + smoothing
+                + ("_p_free" if include_p else "")
+                + "_seed_" + str(seed))
 
     if PRINT_TO_FILE:
-        print(f"\nSaving results to file '{filename}.results'\n")
+        print(f"\nSaving results to file '{filename}.results'")
         f = open(PRINT_PATH + filename + ".results", 'w')
         sys.stdout = f  # Change the standard output to the file we created
 
-    print("*** Bayesian Functional Linear Regression ***\n")
+    print("\n*** Bayesian Functional Linear Regression ***\n")
 
     # Print dataset information
-    print("-- MODEL GENERATION --")
+
+    print("-- GENERAL INFORMATION --")
+    print(f"Random seed: {seed}")
+    print(f"N_cores: {args.n_cores}")
     print(f"Random train/test splits: {rep + 1}")
-    print(f"CV folds: {cv_folds.n_splits}")
-    print(f"Total samples: {len(X_fd)}")
+    print(f"CV folds: {args.n_folds}")
+
+    print("\n-- MODEL GENERATION --")
+    print(f"Total samples: {args.n_samples}")
+    print(f"Grid size: {len(X_fd.grid_points[0])}")
+    print(f"Train size: {len(X_train)}")
     if args.smoothing:
         print("Smoothing: Nadaraya-Watson")
     else:
@@ -803,19 +828,25 @@ def main():
     else:
         print(f"Data name: {args.data_name}")
 
+    print("\n-- BAYESIAN RKHS MODEL --")
+    print("Number of components (p):", (prior_p if include_p else ps))
+    print("Values of η:", etas)
+    print(f"g = {g}")
+
     if rep + 1 > 0:
         # Print MCMC method information
         if args.method == "emcee":
             print("\n-- EMCEE SAMPLER --")
             print(f"N_walkers: {args.n_walkers}")
-            print(f"N_iters: {args.n_iter}")
+            print(f"N_iters: {args.n_iter} + {args.n_tune}")
+            print(f"Frac_random: {args.frac_random}")
             print("Moves:")
             for move, prob in moves:
                 print(f"  {move.__class__.__name__}, {prob}")
         else:
             print("\n-- PYMC SAMPLER --")
             print(f"N_walkers: {args.n_walkers}")
-            print(f"N_iters: {args.n_iter}")
+            print(f"N_iters: {args.n_iter} + {args.n_tune}")
             print("Step method: "
                   + ("NUTS" if args.step == "nuts" else "Metropolis"))
             if args.step == "nuts":
@@ -824,7 +855,7 @@ def main():
         # Print results
 
         if RUN_REF_ALGS:
-            print("\n-- RESULTS REFERENCE ALGORITHMS --\n")
+            print("\n-- RESULTS REFERENCE ALGORITHMS --")
             print(
                 "Mean split execution time: "
                 f"{exec_times[:rep + 1, 0].mean():.3f}"
