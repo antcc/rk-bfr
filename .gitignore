@@ -11,6 +11,7 @@ _*.txt
 *.results
 *results.html
 examples/out*/*
+examples/results/*
 
 # Ignore helper files
 graphs.ipynb

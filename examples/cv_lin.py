@@ -48,8 +48,8 @@ RUN_REF_ALGS = True
 VERBOSE = True
 PRINT_TO_FILE = False
 SAVE_RESULTS = True
-PRINT_PATH = "./"
-SAVE_PATH = "./out/"
+PRINT_PATH = "./results/"  # /home/antcc/results/
+SAVE_PATH = PRINT_PATH + "out/"
 
 
 ###################################################################
@@ -501,7 +501,7 @@ def main():
     tau_range = (0, 1)
     beta_coef = simulation.cholaquidis_scenario3
     train_size = 0.7
-    n_folds = 2
+    n_folds = 5
     cv_folds = KFold(n_folds, shuffle=True, random_state=seed)
 
     # Decide if p is an hyperparameter or part of the model
@@ -554,6 +554,9 @@ def main():
     ##
     # GET DATASET
     ##
+
+    if VERBOSE:
+        print("Getting data...\n")
 
     # Get dataset parameters
     is_simulated_data = not args.data == "real"
@@ -632,7 +635,7 @@ def main():
                     X_train, y_train, n_grid, seed + rep)
 
                 if VERBOSE:
-                    print(f"\n(It. {rep + 1}/{args.n_reps}) "
+                    print(f"(It. {rep + 1}/{args.n_reps}) "
                           f"Running {len(reg_ref)} reference models...")
 
                 # Fit models (through CV+refitting) and predict on test set
@@ -665,7 +668,7 @@ def main():
             total_models = np.prod([cv_folds.n_splits, *params_cv_shape])
 
             if VERBOSE:
-                print(f"\n(It. {rep + 1}/{args.n_reps}) Running {total_models} "
+                print(f"(It. {rep + 1}/{args.n_reps}) Running {total_models} "
                       "bayesian RKHS models...")
 
             mse_bayesian_cv, mse_var_sel_cv, reg_cv = bayesian_cv(
@@ -747,7 +750,7 @@ def main():
             max(bayesian_strategy_count, key=bayesian_strategy_count.get)
         ),
         (
-            args.method + "+ridge",
+            args.method + "+sk_ridge",
             np.mean(mse_var_sel_best[:rep + 1]),
             np.std(mse_var_sel_best[:rep + 1]),
             max(var_sel_strategy_count, key=var_sel_strategy_count.get)
@@ -772,17 +775,17 @@ def main():
         data_name = args.data + "_" + kernel_fn.__name__
     else:
         data_name = args.data_name
-    smoothing = "_smoothing_" if args.smoothing else ""
+    smoothing = "_smoothing" if args.smoothing else ""
 
     filename = ("reg_" + args.method + "_" + data_name
                 + smoothing + "_seed_" + str(seed))
 
     if PRINT_TO_FILE:
-        print(f"\nSaving results to file '{filename}'")
+        print(f"\nSaving results to file '{filename}.results'\n")
         f = open(PRINT_PATH + filename + ".results", 'w')
         sys.stdout = f  # Change the standard output to the file we created
 
-    print("\n--> Bayesian Functional Linear Regression <--\n")
+    print("*** Bayesian Functional Linear Regression ***\n")
 
     # Print dataset information
     print("-- MODEL GENERATION --")
@@ -795,7 +798,7 @@ def main():
         print("Smoothing: none")
 
     if is_simulated_data:
-        print(f"Model type: {args.data}")
+        print(f"Model type: {args.data.upper()}")
         print(f"X ~ GP(0, {kernel_fn.__name__})")
     else:
         print(f"Data name: {args.data_name}")
@@ -823,7 +826,8 @@ def main():
         if RUN_REF_ALGS:
             print("\n-- RESULTS REFERENCE ALGORITHMS --\n")
             print(
-                f"Mean CV execution time: {exec_times[:rep + 1, 0].mean():.3f}"
+                "Mean split execution time: "
+                f"{exec_times[:rep + 1, 0].mean():.3f}"
                 f"±{exec_times[:rep + 1, 0].std():.3f} s")
             print("Total splits execution time: "
                   f"{exec_times[:rep + 1, 0].sum()/60.:.3f} min\n")
@@ -831,7 +835,8 @@ def main():
 
         print(f"\n-- RESULTS {args.method.upper()} --")
         print(
-            f"Mean CV execution time: {exec_times[:rep + 1, 1].mean():.3f}"
+            "Mean split execution time: "
+            f"{exec_times[:rep + 1, 1].mean():.3f}"
             f"±{exec_times[:rep + 1, 1].std():.3f} s")
         print("Total splits execution time: "
               f"{exec_times[:rep + 1, 1].sum()/60.:.3f} min\n")
@@ -855,24 +860,13 @@ def main():
             )
             df.to_csv(SAVE_PATH + filename + ".csv", index=False)
 
-            # Save the mean CV results to disk
-            np.save(
-                SAVE_PATH + filename + "_bayesian_all.npy",
-                mse_bayesian_all
-            )
-            np.save(
-                SAVE_PATH + filename + "_var_sel_all.npy",
-                mse_var_sel_all
-            )
-
-            # Save the strategy statistics to disk
-            np.save(
-                SAVE_PATH + filename + "_bayesian_strategy.npy",
-                dict(bayesian_strategy_count)
-            )
-            np.save(
-                SAVE_PATH + filename + "_var_sel_strategy.npy",
-                dict(var_sel_strategy_count)
+            # Save the mean CV results and strategy statistics to disk
+            np.savez(
+                SAVE_PATH + filename + ".npz",
+                mse_bayesian_all=mse_bayesian_all,
+                mse_var_sel_all=mse_var_sel_all,
+                bayesian_strategy_count=dict(bayesian_strategy_count),
+                var_sel_strategy_count=dict(var_sel_strategy_count)
             )
     except Exception as ex:
         print(ex)

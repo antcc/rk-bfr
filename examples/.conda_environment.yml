@@ -1,0 +1,16 @@
+name: bfr-39
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - mkl
+  - theano-pymc
+  - pymc3
+  - mkl-service
+  - emcee
+  - scikit-learn
+  - fdasrsf
+  - scipy==1.7.3
+  - pip:
+    - scikit-fda
