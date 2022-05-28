@@ -47,7 +47,7 @@ pd.set_option('display.max_columns', 80)
 RUN_REF_ALGS = False
 VERBOSE = True
 PRINT_TO_FILE = False
-SAVE_RESULTS = True
+SAVE_RESULTS = False
 PRINT_PATH = "../results/"  # /home/antcc/bayesian-functional-regression/results/
 SAVE_PATH = PRINT_PATH + "out/"
 
@@ -114,7 +114,7 @@ def get_arg_parser():
         help="number of grid points for functional regressors"
     )
     parser.add_argument(
-        "--smoothing", action="store_true",
+        "--smoothing", default="nw", choices=["none", "nw"],
         help="smooth functional data as part of preprocessing"
     )
     parser.add_argument(
@@ -128,7 +128,7 @@ def get_arg_parser():
         help="number of independent chains in MCMC algorithm"
     )
     parser.add_argument(
-        "--n-iter", type=int, default=100,
+        "--n-iters", type=int, default=100,
         help="number of iterations in MCMC algorithm"
     )
     parser.add_argument(
@@ -227,7 +227,7 @@ def get_data(
             raise ValueError("Must provide a kernel function.")
 
         grid = np.linspace(tau_range[0] + 1./n_grid, tau_range[1], n_grid)
-        tau_true = [0.1, 0.8]
+        tau_true = [0.1, 0.4, 0.8]
         alpha0_true = 5.
         sigma2_true = 0.5
 
@@ -245,7 +245,7 @@ def get_data(
                 rng=rng
             )
         elif model_type == "rkhs":
-            beta_true = [-5., 10.]
+            beta_true = [-5., 1., 10.]
             X, y = simulation.generate_gp_rkhs_dataset(
                 grid,
                 kernel_fn,
@@ -367,7 +367,7 @@ def get_bayesian_model_wrapper(
         return lambda theta_space, kwargs: BayesianLinearRegressionEmcee(
             theta_space,
             args.n_walkers,
-            args.n_iter,
+            args.n_iters,
             b0='mle',
             g=g,
             prior_p=prior_p,
@@ -383,7 +383,7 @@ def get_bayesian_model_wrapper(
         return lambda theta_space, kwargs: BayesianLinearRegressionPymc(
             theta_space,
             args.n_walkers,
-            args.n_iter,
+            args.n_iters,
             step_fn=step_fn,
             step_kwargs=step_kwargs,
             b0='mle',
@@ -596,7 +596,7 @@ def main():
         args.n_grid,
         kernel_fn=kernel_fn,
         beta_coef=beta_coef,
-        initial_smoothing=args.smoothing,
+        initial_smoothing=args.smoothing == "nw",
         tau_range=tau_range,
         rng=rng
     )
@@ -792,7 +792,7 @@ def main():
         data_name = args.data + "_" + kernel_fn.__name__
     else:
         data_name = args.data_name
-    smoothing = "_smoothing" if args.smoothing else ""
+    smoothing = "_smoothing_nw" if args.smoothing == "nw" else ""
 
     filename = ("reg_" + args.method + "_" + data_name + smoothing
                 + ("_p_free" if include_p else "")
@@ -817,10 +817,10 @@ def main():
     print(f"Total samples: {args.n_samples}")
     print(f"Grid size: {len(X_fd.grid_points[0])}")
     print(f"Train size: {len(X_train)}")
-    if args.smoothing:
+    if args.smoothing == "nw":
         print("Smoothing: Nadaraya-Watson")
     else:
-        print("Smoothing: none")
+        print("Smoothing: None")
 
     if is_simulated_data:
         print(f"Model type: {args.data.upper()}")
@@ -838,7 +838,7 @@ def main():
         if args.method == "emcee":
             print("\n-- EMCEE SAMPLER --")
             print(f"N_walkers: {args.n_walkers}")
-            print(f"N_iters: {args.n_iter} + {args.n_tune}")
+            print(f"N_iters: {args.n_iters} + {args.n_tune}")
             print(f"Frac_random: {args.frac_random}")
             print("Moves:")
             for move, prob in moves:
@@ -846,7 +846,7 @@ def main():
         else:
             print("\n-- PYMC SAMPLER --")
             print(f"N_walkers: {args.n_walkers}")
-            print(f"N_iters: {args.n_iter} + {args.n_tune}")
+            print(f"N_iters: {args.n_iters} + {args.n_tune}")
             print("Step method: "
                   + ("NUTS" if args.step == "nuts" else "Metropolis"))
             if args.step == "nuts":
