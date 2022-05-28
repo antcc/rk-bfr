@@ -9,6 +9,9 @@ _*.txt
 *temp*
 slurm*
 
+# Ignore launch files
+launch*.sh
+
 # Ignore results files
 results*/*
 html/
