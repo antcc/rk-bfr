@@ -44,7 +44,7 @@ pd.set_option("display.precision", 3)
 pd.set_option('display.max_columns', 80)
 
 # Script behavior
-RUN_REF_ALGS = False
+RUN_REF_ALGS = True
 VERBOSE = True
 PRINT_TO_FILE = False
 SAVE_RESULTS = False
@@ -264,7 +264,7 @@ def get_data(
 
     else:  # Real data
         if model_type == "tecator":
-            X, y = fetch_tecator(return_X_y=True)
+            X_fd, y = fetch_tecator(return_X_y=True)
             y = np.sqrt(y[:, 1])  # Sqrt-Fat
         elif model_type == "aemet":
             data = fetch_aemet()['data']

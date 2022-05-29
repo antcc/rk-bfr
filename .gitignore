@@ -7,7 +7,13 @@ _*.md
 _*.txt
 *TEMP*
 *temp*
+
+# Ignore cluster files
 slurm*
+*ccc*
+
+# Ignore launch files
+launch*.sh
 
 # Ignore results files
 results*/*
