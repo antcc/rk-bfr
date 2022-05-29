@@ -44,7 +44,7 @@ pd.set_option("display.precision", 3)
 pd.set_option('display.max_columns', 80)
 
 # Script behavior
-RUN_REF_ALGS = True
+RUN_REF_ALGS = False
 VERBOSE = True
 PRINT_TO_FILE = False
 SAVE_RESULTS = False
@@ -792,10 +792,13 @@ def main():
         data_name = args.data + "_" + kernel_fn.__name__
     else:
         data_name = args.data_name
-    smoothing = "_smoothing_nw" if args.smoothing == "nw" else ""
+    smoothing = "_smoothing" if args.smoothing == "nw" else ""
 
-    filename = ("reg_" + args.method + "_" + data_name + smoothing
+    filename = ("reg_" + args.method + "_"
+                + (args.moves if args.method == "emcee" else args.step)
+                + "_" + data_name + "_" + str(len(X_fd)) + smoothing
                 + ("_p_free" if include_p else "")
+                + "_nw_" + str(args.n_walkers) + "_ni_" + str(args.n_iters)
                 + "_seed_" + str(seed))
 
     if PRINT_TO_FILE:
