@@ -1,0 +1,59 @@
+
+*** Bayesian Functional Linear Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+
+-- MODEL GENERATION --
+Total samples: 200
+Grid size: 100
+Train size: 140
+Smoothing: None
+Model type: RKHS
+X ~ GP(0, ornstein_uhlenbeck_kernel)
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): [2, 3, 4]
+Values of η: [0.001, 0.01, 0.1, 1]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 1000 + 100
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE ALGORITHMS --
+Mean split execution time: 64.857±0.818 s
+Total splits execution time: 10.809 min
+
+            Estimator  Mean MSE      SD
+             sk_lasso     0.572   0.084
+  manual_sel+sk_ridge     1.107   0.104
+         pls+sk_ridge     1.231   0.220
+              sk_pls1     1.232   0.222
+              sk_apls     1.441   0.206
+       sk_fpls1_basis     2.881   0.450
+        sk_flin_basis     2.891   0.466
+         rmh+sk_ridge     2.900   1.628
+        fpca+sk_ridge     3.675   0.290
+         pca+sk_ridge     3.685   0.290
+      fpca+sk_svm_rbf     4.674   0.730
+       rmh+sk_svm_rbf     5.351   2.693
+       pls+sk_svm_rbf     5.420   3.125
+manual_sel+sk_svm_rbf     7.136   3.030
+       pca+sk_svm_rbf    10.097   2.999
+              sk_fknn    17.584   3.826
+
+-- RESULTS EMCEE --
+Mean split execution time: 2220.444±11.800 s
+Total splits execution time: 370.074 min
+
+     Estimator  Mean MSE      SD Main strategy
+emcee+sk_ridge     0.547   0.082          mode
+         emcee     0.676   0.195          mode

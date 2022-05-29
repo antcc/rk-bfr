@@ -1,0 +1,58 @@
+
+*** Bayesian Functional Linear Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+
+-- MODEL GENERATION --
+Total samples: 150
+Grid size: 365
+Train size: 51
+Smoothing: None
+Data name: aemet
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): [2, 3, 4, 5]
+Values of η: [0.01, 0.1, 1, 10]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 1000 + 100
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE ALGORITHMS --
+Mean split execution time: 42.003±0.434 s
+Total splits execution time: 7.000 min
+
+            Estimator  Mean MSE      SD
+       pca+sk_svm_rbf     0.422   0.319
+      fpca+sk_svm_rbf     0.422   0.319
+manual_sel+sk_svm_rbf     0.433   0.346
+       pls+sk_svm_rbf     0.454   0.324
+         pca+sk_ridge     0.517   0.236
+        fpca+sk_ridge     0.520   0.238
+              sk_fknn     0.537   0.268
+         pls+sk_ridge     0.554   0.233
+  manual_sel+sk_ridge     0.556   0.289
+              sk_apls     0.585   0.263
+         rmh+sk_ridge     0.594   0.252
+              sk_pls1     0.597   0.270
+       rmh+sk_svm_rbf     0.601   0.349
+        sk_flin_basis     0.624   0.310
+       sk_fpls1_basis     0.643   0.279
+             sk_lasso     0.657   0.349
+
+-- RESULTS EMCEE --
+Mean split execution time: 2734.411±29.641 s
+Total splits execution time: 455.735 min
+
+     Estimator  Mean MSE      SD  Main strategy
+emcee+sk_ridge     0.562   0.271           mode
+         emcee     2.695   6.298 posterior_mean
