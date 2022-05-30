@@ -35,6 +35,7 @@ def compute_mle(
     kind='linear',
     method='Powell',
     strategy='global',
+    n_reps=4,
     n_jobs=2,
     rng=None,
 ):
@@ -76,10 +77,10 @@ def compute_mle(
         )
 
     elif strategy == 'global':
-        mles = np.zeros((n_jobs, n_dim))
+        mles = np.zeros((n_reps, n_dim))
 
         with Pool(n_jobs) as pool:
-            random_states = [rng.integers(2**32) for i in range(n_jobs)]
+            random_states = [rng.integers(2**32) for i in range(n_reps)]
 
             args_optim = ((
                 theta_space,

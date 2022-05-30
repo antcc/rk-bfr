@@ -31,7 +31,7 @@ DataType = Union[
     np.ndarray,
 ]
 
-StepType = Callable[Any, BlockedStep]
+StepType = Callable[[Any], BlockedStep]
 
 ModelType = Callable[
     # X, y, theta_space, **kwargs, rng
@@ -332,6 +332,7 @@ class BayesianLinearRegression(
             kind='linear',
             method=self.mle_method,
             strategy=self.mle_strategy,
+            n_reps=self.n_reps_mle,
             n_jobs=self.n_jobs_,
             rng=self.rng_
         )
@@ -410,6 +411,7 @@ class BayesianLinearRegressionEmcee(BayesianLinearRegression):
         burn_relative: int = 3,
         mle_method: str = 'L-BFGS-B',
         mle_strategy: str = 'global',
+        n_reps_mle: int = 4,
         n_jobs: int = 1,
         verbose: int = 0,
         progress_notebook: bool = False,
@@ -437,6 +439,7 @@ class BayesianLinearRegressionEmcee(BayesianLinearRegression):
         self.burn_relative = burn_relative
         self.mle_method = mle_method
         self.mle_strategy = mle_strategy
+        self.n_reps_mle = n_reps_mle
         self.n_jobs = n_jobs
         self.verbose = verbose
         self.progress_notebook = progress_notebook
@@ -786,6 +789,7 @@ class BayesianLinearRegressionPymc(BayesianLinearRegression):
         burn: int = 0,
         mle_method: str = 'L-BFGS-B',
         mle_strategy: str = 'global',
+        n_reps_mle: int = 4,
         n_jobs: int = 1,
         verbose: int = 0,
         random_state: RandomType = None
@@ -807,6 +811,7 @@ class BayesianLinearRegressionPymc(BayesianLinearRegression):
         self.burn = burn
         self.mle_method = mle_method
         self.mle_strategy = mle_strategy
+        self.n_reps_mle = n_reps_mle
         self.n_jobs = n_jobs
         self.verbose = verbose
         self.random_state = random_state

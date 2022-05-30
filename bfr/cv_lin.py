@@ -136,6 +136,10 @@ def get_arg_parser():
         help="number of tune/warmup iterations in MCMC algorithm"
     )
     parser.add_argument(
+        "--n-reps-mle", type=int, default=8,
+        help="number of random repetitions of MLE computation"
+    )
+    parser.add_argument(
         "--eta-range", type=int, metavar=("ETA_MIN", "ETA_MAX"),
         nargs=2, default=[-1, 1],
         help="range of the parameter η (in logarithmic space)"
@@ -358,6 +362,7 @@ def get_bayesian_model_wrapper(
     args,
     g,
     prior_p,
+    n_reps_mle,
     rng,
     moves=None,
     step_fn=None,
@@ -374,6 +379,7 @@ def get_bayesian_model_wrapper(
             n_iter_warmup=args.n_tune,
             frac_random=args.frac_random,
             moves=moves,
+            n_reps_mle=n_reps_mle,
             n_jobs=args.n_cores,
             verbose=args.verbose,
             random_state=rng,
@@ -390,6 +396,7 @@ def get_bayesian_model_wrapper(
             g=g,
             prior_p=prior_p,
             n_iter_warmup=args.n_tune,
+            n_reps_mle=n_reps_mle,
             n_jobs=args.n_cores,
             verbose=args.verbose,
             random_state=rng,
@@ -618,7 +625,7 @@ def main():
     theta_space_wrapper = get_theta_space_wrapper(
         grid, include_p, theta_names, tau_range)
     bayesian_model_wrapper = get_bayesian_model_wrapper(
-        args, g, prior_p, rng, moves, step_fn, step_kwargs)
+        args, g, prior_p, args.n_reps_mle, rng, moves, step_fn, step_kwargs)
 
     # Linear regressor for variable selection algorithm
     reg_linear = Pipeline([
@@ -834,6 +841,7 @@ def main():
     print("\n-- BAYESIAN RKHS MODEL --")
     print("Number of components (p):", (prior_p if include_p else ps))
     print("Values of η:", etas)
+    print("N_reps MLE:", args.n_reps_mle)
     print(f"g = {g}")
 
     if rep + 1 > 0:
