@@ -12,7 +12,6 @@ import arviz as az
 import emcee
 import numpy as np
 import pymc3 as pm
-import utils
 from bayesian_model import (PriorType, RandomType, ThetaSpace, generate_pp,
                             log_posterior_linear, log_prior_linear,
                             make_model_linear_pymc, point_estimate,
@@ -25,6 +24,7 @@ from skfda.representation.grid import FDataGrid
 from sklearn.base import BaseEstimator, RegressorMixin, TransformerMixin
 from sklearn.metrics import r2_score
 from sklearn.utils.validation import check_is_fitted
+from utils import HandleLogger, check_random_state, fdata_to_numpy, mode_fn
 
 DataType = Union[
     FData,
@@ -35,7 +35,7 @@ StepType = Callable[[Any], BlockedStep]
 
 ModelType = Callable[
     # X, y, theta_space, **kwargs, rng
-    [np.ndarray, np.ndarray, ThetaSpace, Any, RandomType],
+    [np.ndarray, np.ndarray, ThetaSpace, Any, Optional[RandomType]],
     pm.Model
 ]
 
@@ -59,11 +59,14 @@ class BayesianLinearRegression(
     @abstractmethod
     def fit(self, X, y):
         # Initialization tasks
-        self.rng_ = utils.check_random_state(self.random_state)
+        self.rng_ = check_random_state(self.random_state)
         self.n_jobs_ = self.n_jobs if self.n_jobs > 0 else os.cpu_count()
         self._mean_alpha0 = y.mean()
-        self.mle_ = None
-        self._theta_space_fixed = None
+        self.mle_ = self.mle_precomputed
+        if self.mle_ is not None:
+            self._theta_space_fixed = self.theta_space.copy_p_fixed()
+        else:
+            self._theta_space_fixed = None
         if self.theta_space.include_p:
             self._n_components_default_pe = {}
 
@@ -152,7 +155,7 @@ class BayesianLinearRegression(
             "min": np.nanmin if skipna else np.min,
             "max": np.nanmax if skipna else np.max,
             "median": np.nanmedian if skipna else np.median,
-            "mode": lambda x: utils.mode_fn(x, skipna=skipna, bw=bw),
+            "mode": lambda x: mode_fn(x, skipna=skipna, bw=bw),
         }
 
         return az.summary(
@@ -214,7 +217,7 @@ class BayesianLinearRegression(
         x = self.get_trace(burn, thin)
         x = x.swapaxes(0, 1)  # (draw, chain, n_dim)
 
-        with utils.HandleLogger(self.verbose):
+        with HandleLogger(self.verbose):
             if self.theta_space.include_p:
                 n_dim = self.theta_space.n_dim
                 autocorr = np.zeros(n_dim)
@@ -341,21 +344,7 @@ class BayesianLinearRegression(
 
     def _argcheck_X(self, X: DataType) -> np.ndarray:
         grid = self.theta_space.grid
-        N = len(grid)
-
-        if isinstance(X, np.ndarray):
-            if X.shape[1] != N:
-                raise ValueError(
-                    "Data must be compatible with the specified "
-                    "grid (i.e. 'self.theta_space.grid').")
-        elif isinstance(X, FDataBasis):
-            X = X.to_grid(grid_points=grid).data_matrix.reshape(-1, N)
-        elif isinstance(X, FDataGrid):
-            X = X.data_matrix.reshape(-1, N)
-        else:
-            raise ValueError('Data type not supported for X.')
-
-        return X
+        return fdata_to_numpy(X, grid)
 
     def _argcheck_X_y(  # noqa: N802
         self,
@@ -409,6 +398,7 @@ class BayesianLinearRegressionEmcee(BayesianLinearRegression):
         thin_pp: int = 5,
         burn: int = 100,
         burn_relative: int = 3,
+        mle_precomputed: Optional[np.ndarray] = None,
         mle_method: str = 'L-BFGS-B',
         mle_strategy: str = 'global',
         n_reps_mle: int = 4,
@@ -416,7 +406,7 @@ class BayesianLinearRegressionEmcee(BayesianLinearRegression):
         verbose: int = 0,
         progress_notebook: bool = False,
         progress_kwargs: Optional[Dict] = None,
-        random_state: RandomType = None
+        random_state: Optional[RandomType] = None
     ) -> BayesianLinearRegressionEmcee:
         self.theta_space = theta_space
         self.n_walkers = n_walkers
@@ -437,6 +427,7 @@ class BayesianLinearRegressionEmcee(BayesianLinearRegression):
         self.thin_pp = thin_pp
         self.burn = burn
         self.burn_relative = burn_relative
+        self.mle_precomputed = mle_precomputed
         self.mle_method = mle_method
         self.mle_strategy = mle_strategy
         self.n_reps_mle = n_reps_mle
@@ -787,12 +778,13 @@ class BayesianLinearRegressionPymc(BayesianLinearRegression):
         thin: int = 1,
         thin_pp: int = 5,
         burn: int = 0,
+        mle_precomputed: Optional[np.ndarray] = None,
         mle_method: str = 'L-BFGS-B',
         mle_strategy: str = 'global',
         n_reps_mle: int = 4,
         n_jobs: int = 1,
         verbose: int = 0,
-        random_state: RandomType = None
+        random_state: Optional[RandomType] = None
     ) -> BayesianLinearRegressionPymc:
         self.theta_space = theta_space
         self.n_walkers = n_walkers
@@ -809,6 +801,7 @@ class BayesianLinearRegressionPymc(BayesianLinearRegression):
         self.thin = thin
         self.thin_pp = thin_pp
         self.burn = burn
+        self.mle_precomputed = mle_precomputed
         self.mle_method = mle_method
         self.mle_strategy = mle_strategy
         self.n_reps_mle = n_reps_mle
@@ -870,7 +863,7 @@ class BayesianLinearRegressionPymc(BayesianLinearRegression):
         # Run MCMC procedure
 
         with self.model_:
-            with utils.HandleLogger(self.verbose):
+            with HandleLogger(self.verbose):
                 idata = pm.sample(
                     self.n_iter,
                     cores=self.n_jobs_,

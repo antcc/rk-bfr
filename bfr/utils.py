@@ -22,6 +22,7 @@ from skfda.preprocessing.dim_reduction.feature_extraction import FPCA
 from skfda.preprocessing.dim_reduction.variable_selection import \
     RecursiveMaximaHunting as RMH
 from skfda.representation.basis import FDataBasis
+from skfda.representation.grid import FDataGrid
 from sklearn.decomposition import PCA
 from sklearn.linear_model import Lasso, Ridge
 from sklearn.metrics import mean_squared_error, r2_score
@@ -30,6 +31,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.svm import SVR
 from sklearn_utils import (Basis, DataMatrix, FeatureSelector,
                            PLSRegressionWrapper)
+
 
 # Custom context managers for handling warnings
 
@@ -86,6 +88,23 @@ def check_random_state(seed):
     raise ValueError(
         "%r cannot be used to seed a numpy.random.Generator instance" % seed
     )
+
+
+def fdata_to_numpy(X, grid):
+    N = len(grid)
+
+    if isinstance(X, np.ndarray):
+        if X.shape[1] != N:
+            raise ValueError(
+                "Data must be compatible with the specified grid")
+    elif isinstance(X, FDataBasis):
+        X = X.to_grid(grid_points=grid).data_matrix.reshape(-1, N)
+    elif isinstance(X, FDataGrid):
+        X = X.data_matrix.reshape(-1, N)
+    else:
+        raise ValueError('Data type not supported for X.')
+
+    return X
 
 
 def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):

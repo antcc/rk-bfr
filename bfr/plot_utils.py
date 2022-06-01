@@ -76,7 +76,7 @@ def plot_dataset_classification(
             linewidth=3, color='k',
             label="Sample mean")
 
-    axs[0].legend(fontsize=8)
+    axs[0].legend(fontsize=10)
 
     axs[1].set_title("Class distribution")
     axs[1].set_xlabel("Class")

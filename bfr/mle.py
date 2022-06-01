@@ -3,6 +3,7 @@ from multiprocessing import Pool
 import numpy as np
 import scipy
 from bayesian_model import neg_ll_linear, neg_ll_logistic
+from utils import fdata_to_numpy
 
 
 def optimizer_global(
@@ -44,6 +45,7 @@ def compute_mle(
 
     p = theta_space.p_max
     n_dim = theta_space.n_dim
+    X = fdata_to_numpy(X, theta_space.grid)
 
     theta_init = theta_space.forward(
         np.array([0.0]*p + [0.5]*p + [0.0] + [1.0])

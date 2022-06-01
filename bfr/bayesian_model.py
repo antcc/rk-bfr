@@ -1,6 +1,6 @@
 # encoding: utf-8
 
-from typing import Any, Callable, Dict, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
 import pymc3 as pm
@@ -281,7 +281,6 @@ RandomType = Union[
     int,
     np.random.RandomState,
     np.random.Generator,
-    None
 ]
 
 PriorType = Callable[
@@ -358,7 +357,12 @@ def probability_to_label(y_lin, random_noise=None, rng=None):
     if rng is None:
         rng = np.random.default_rng()
 
-    return rng.binomial(1, expit(y_lin))
+    labels = rng.binomial(1, expit(y_lin))
+
+    if random_noise is not None:
+        labels = apply_label_noise(labels, random_noise, rng)
+
+    return labels
 
 
 def apply_label_noise(y, noise_frac=0.05, rng=None):
@@ -373,6 +377,8 @@ def apply_label_noise(y, noise_frac=0.05, rng=None):
 
     y_noise[idx_0] = 1
     y_noise[idx_1] = 0
+
+    return y_noise
 
 
 def generate_pp(
@@ -552,7 +558,7 @@ def log_posterior_linear(
     y: np.ndarray,
     theta_space: ThetaSpace,
     log_prior: PriorType = log_prior_linear,
-    rng: RandomType = None,
+    rng: Optional[RandomType] = None,
     return_pp: bool = False,
     return_ll: bool = False,
     prior_kwargs: Dict = {},

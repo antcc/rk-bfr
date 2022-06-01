@@ -17,6 +17,7 @@ from _fpls import FPLSBasis
 from bayesian_model import ThetaSpace
 from mcmc_sampler import (BayesianLinearRegressionEmcee,
                           BayesianLinearRegressionPymc)
+from mle import compute_mle
 from skfda.datasets import fetch_aemet, fetch_tecator
 from skfda.preprocessing.smoothing.kernel_smoothers import \
     NadarayaWatsonSmoother as NW
@@ -46,6 +47,7 @@ pd.set_option('display.max_columns', 80)
 # Script behavior
 RUN_REF_ALGS = False
 VERBOSE = True
+PRECOMPUTE_MLE = True
 PRINT_TO_FILE = False
 SAVE_RESULTS = False
 PRINT_PATH = "../results/"  # /home/antcc/bayesian-functional-regression/results/
@@ -155,7 +157,7 @@ def get_arg_parser():
         help="fraction of initial points randomly generated in emcee sampler"
     )
     parser.add_argument(
-        "--moves", choices=["sw", "de"], default="sw",
+        "--moves", choices=["sw", "de", "s"], default="sw",
         help="types of moves in emcee sampler"
     )
 
@@ -358,11 +360,23 @@ def get_theta_space_wrapper(grid, include_p, theta_names, tau_range):
     )
 
 
+def get_mle_wrapper(method, strategy, n_reps, n_jobs, rng):
+    return lambda X, y, theta_space: compute_mle(
+        X,
+        y,
+        theta_space,
+        kind='linear',
+        method=method,
+        strategy=strategy,
+        n_reps=n_reps,
+        n_jobs=n_jobs,
+        rng=rng
+    )[0]
+
+
 def get_bayesian_model_wrapper(
     args,
-    g,
     prior_p,
-    n_reps_mle,
     rng,
     moves=None,
     step_fn=None,
@@ -374,12 +388,12 @@ def get_bayesian_model_wrapper(
             args.n_walkers,
             args.n_iters,
             b0='mle',
-            g=g,
+            g=args.g,
             prior_p=prior_p,
             n_iter_warmup=args.n_tune,
             frac_random=args.frac_random,
             moves=moves,
-            n_reps_mle=n_reps_mle,
+            n_reps_mle=args.n_reps_mle,
             n_jobs=args.n_cores,
             verbose=args.verbose,
             random_state=rng,
@@ -393,10 +407,10 @@ def get_bayesian_model_wrapper(
             step_fn=step_fn,
             step_kwargs=step_kwargs,
             b0='mle',
-            g=g,
+            g=args.g,
             prior_p=prior_p,
             n_iter_warmup=args.n_tune,
-            n_reps_mle=n_reps_mle,
+            n_reps_mle=args.n_reps_mle,
             n_jobs=args.n_cores,
             verbose=args.verbose,
             random_state=rng,
@@ -416,12 +430,14 @@ def bayesian_cv(
     params_cv_names,
     params_cv_shape,
     theta_space_wrapper,
+    mle_wrapper,
     bayesian_model_wrapper,
     include_p,
     p_max,
     all_estimates,
     point_estimates,
     reg_linear,
+    precompute_mle=False,
     verbose=False
 ):
     # Record MSE for all [fold, p, eta]
@@ -435,6 +451,9 @@ def bayesian_cv(
 
     if include_p:
         theta_space = theta_space_wrapper(p_max)
+        if precompute_mle:
+            ts_fixed = theta_space.copy_p_fixed()
+            mle_theta = mle_wrapper(X, y, ts_fixed)
 
     # Perform K-fold cross-validation for the parameters 'p' and 'η'
     for i, (train_cv, test_cv) in enumerate(cv_folds.split(X)):
@@ -450,11 +469,16 @@ def bayesian_cv(
                 param_without_p = param[1:]
                 param_names_without_p = params_cv_names[1:]
                 theta_space = theta_space_wrapper(param[0])
+                if precompute_mle:
+                    mle_theta = mle_wrapper(X, y, theta_space)
 
             named_params = {
                 k: v
                 for k, v in zip(param_names_without_p, param_without_p)
             }
+
+            if precompute_mle:
+                named_params = {**named_params, "mle_precomputed": mle_theta}
 
             if verbose:
                 it = iteration_count(
@@ -531,7 +555,8 @@ def main():
     include_p = args.p_prior is not None
 
     # Main hyperparameters
-    g = args.g
+    mle_method = 'L-BFGS-B'
+    mle_strategy = 'global'
     etas = [10**i for i in range(args.eta_range[0], args.eta_range[1] + 1)]
     params_cv = [etas]
     params_cv_names = ["eta"]
@@ -555,10 +580,12 @@ def main():
             moves = [
                 (emcee.moves.StretchMove(), 0.7),
                 (emcee.moves.WalkMove(), 0.3)]
-        else:
+        elif args.moves == "de":
             moves = [
                 (emcee.moves.DEMove(), 0.8),
                 (emcee.moves.DESnookerMove(), 0.2)]
+        else:
+            moves = [(emcee.moves.StretchMove(), 1.0)]
     else:
         if args.step == "nuts":
             step_fn = pm.NUTS
@@ -624,8 +651,13 @@ def main():
     # Get wrappers for parameter space and bayesian regressor
     theta_space_wrapper = get_theta_space_wrapper(
         grid, include_p, theta_names, tau_range)
+    if PRECOMPUTE_MLE:
+        mle_wrapper = get_mle_wrapper(
+            mle_method, mle_strategy, args.n_reps_mle, args.n_cores, rng)
+    else:
+        mle_wrapper = None
     bayesian_model_wrapper = get_bayesian_model_wrapper(
-        args, g, prior_p, args.n_reps_mle, rng, moves, step_fn, step_kwargs)
+        args, prior_p, rng, moves, step_fn, step_kwargs)
 
     # Linear regressor for variable selection algorithm
     reg_linear = Pipeline([
@@ -701,12 +733,14 @@ def main():
                 params_cv_names,
                 params_cv_shape,
                 theta_space_wrapper,
+                mle_wrapper,
                 bayesian_model_wrapper,
                 include_p,
                 p_max,
                 all_estimates,
                 point_estimates,
                 reg_linear,
+                precompute_mle=PRECOMPUTE_MLE,
                 verbose=VERBOSE
             )
 
@@ -822,6 +856,7 @@ def main():
     print(f"N_cores: {args.n_cores}")
     print(f"Random train/test splits: {rep + 1}")
     print(f"CV folds: {args.n_folds}")
+    print("N_reps MLE:", args.n_reps_mle)
 
     print("\n-- MODEL GENERATION --")
     print(f"Total samples: {args.n_samples}")
@@ -841,8 +876,7 @@ def main():
     print("\n-- BAYESIAN RKHS MODEL --")
     print("Number of components (p):", (prior_p if include_p else ps))
     print("Values of η:", etas)
-    print("N_reps MLE:", args.n_reps_mle)
-    print(f"g = {g}")
+    print(f"g = {args.g}")
 
     if rep + 1 > 0:
         # Print MCMC method information
