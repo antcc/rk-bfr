@@ -18,7 +18,7 @@ from bayesian_model import ThetaSpace
 from mcmc_sampler import (BayesianLinearRegressionEmcee,
                           BayesianLinearRegressionPymc)
 from mle import compute_mle
-from skfda.datasets import fetch_aemet, fetch_tecator
+from skfda.datasets import fetch_cran, fetch_tecator
 from skfda.preprocessing.smoothing.kernel_smoothers import \
     NadarayaWatsonSmoother as NW
 from skfda.representation.basis import BSpline, Fourier
@@ -45,7 +45,7 @@ pd.set_option("display.precision", 3)
 pd.set_option('display.max_columns', 80)
 
 # Script behavior
-RUN_REF_ALGS = False
+RUN_REF_ALGS = True
 VERBOSE = True
 PRECOMPUTE_MLE = True
 PRINT_TO_FILE = False
@@ -190,7 +190,7 @@ def get_arg_parser():
     data_group.add_argument(
         "--data-name",
         help="name of data set to use as real data",
-        choices=["tecator", "aemet"]
+        choices=["tecator", "moisture"]
     )
     p_group.add_argument(
         "--p-range",
@@ -271,14 +271,11 @@ def get_data(
     else:  # Real data
         if model_type == "tecator":
             X_fd, y = fetch_tecator(return_X_y=True)
-            y = np.sqrt(y[:, 1])  # Sqrt-Fat
-        elif model_type == "aemet":
-            data = fetch_aemet()['data']
-            data_matrix = data.data_matrix
-            temperature = data_matrix[:, :, 0]
-            X_fd = FDataGrid(temperature, data.grid_points)
-            # Log-Sum of log-precipitation for each station
-            y = np.log(np.exp(data_matrix[:, :, 1]).sum(axis=1))
+            y = y[:, 1]  # Fat level
+        elif model_type == "moisture":
+            data = fetch_cran("Moisturespectrum", "fds")["Moisturespectrum"]
+            y = fetch_cran("Moisturevalues", "fds")["Moisturevalues"]
+            X_fd = FDataGrid(data["y"].T[:, ::5], data["x"][::5])
         else:
             raise ValueError("Real data set must be 'tecator' or 'aemet'.")
 
