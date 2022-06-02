@@ -44,7 +44,7 @@ def plot_dataset_classification(
     y,
     plot_means=True,
     n_samples=None,
-    figsize=(5, 4),
+    figsize=(9, 4),
     ax=None
 ):
     fig, axs = plt.subplots(1, 2, figsize=figsize)

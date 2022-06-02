@@ -233,7 +233,6 @@ def get_data(
             raise ValueError("Must provide a kernel function.")
 
         grid = np.linspace(tau_range[0] + 1./n_grid, tau_range[1], n_grid)
-        tau_true = [0.1, 0.4, 0.8]
         alpha0_true = 5.
         sigma2_true = 0.5
 
@@ -252,6 +251,7 @@ def get_data(
             )
         elif model_type == "rkhs":
             beta_true = [-5., 1., 10.]
+            tau_true = [0.1, 0.4, 0.8]
             X, y = simulation.generate_gp_rkhs_dataset(
                 grid,
                 kernel_fn,
@@ -697,6 +697,7 @@ def main():
                     X_test,
                     y_test,
                     cv_folds,
+                    kind='linear',
                     n_jobs=args.n_cores,
                     sort_by=0,
                     verbose=False
