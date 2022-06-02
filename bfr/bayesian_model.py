@@ -342,9 +342,10 @@ def generate_response_logistic(
         y = probability_to_label(y_lin, rng=rng)
     else:
         # sigmoid(x) >= 0.5 iff x >= 0
-        y = y_lin.copy().astype(int)
+        y = y_lin.copy()
         y[..., y >= 0] = 1
         y[..., y < 0] = 0
+        y = y.astype(int)
 
     if return_prob:
         return expit(y_lin), y
@@ -486,10 +487,10 @@ def bpv(pp_y, y, t_stat):
 
 
 #
-# Default log-prior model for linear regression
+# Default log-prior model for linear and logistic regression
 #
 
-def log_prior_linear(
+def log_prior_linear_logistic(
     theta_tr,
     X,
     y,
@@ -549,7 +550,70 @@ def log_prior_linear(
 
 
 #
-# Log-likelihood and log-posterior for linear regression
+# Log-likelihood for linear and logistic regression
+#
+
+
+def log_likelihood_linear(
+    theta_tr,
+    X,
+    y,
+    theta_space,
+    return_ll=False
+):
+    n = X.shape[0]
+    p, beta, tau, alpha0, sigma2 = \
+        theta_space.slice_params(theta_tr, transform='backward')
+
+    idx = np.abs(theta_space.grid - tau[:, np.newaxis]).argmin(1)
+    X_tau = X[:, idx]
+    log_sigma = LogSq().forward(sigma2)
+
+    ll = (-n*log_sigma
+          - np.linalg.norm(y - alpha0 - X_tau@beta)**2/(2*sigma2))
+
+    if return_ll:
+        # Add constant term so that it is the genuine log-probability
+        ll_pointwise = (-log_sigma - 0.5*np.log(2*np.pi)
+                        - (y - alpha0 - X_tau@beta)**2/(2*sigma2))
+        return ll, ll_pointwise
+    else:
+        return ll
+
+
+def log_likelihood_logistic(
+    theta_tr,
+    X,
+    y,
+    theta_space,
+    return_ll=False
+):
+    p, beta, tau, alpha0, sigma2 = \
+        theta_space.slice_params(theta_tr, transform='backward')
+
+    idx = np.abs(theta_space.grid - tau[:, np.newaxis]).argmin(1)
+    X_tau = X[:, idx]
+
+    linear_component = alpha0 + X_tau@beta
+    ll_pointwise = linear_component*y - np.logaddexp(0, linear_component)
+    ll = np.sum(ll_pointwise)
+
+    if return_ll:
+        return ll, ll_pointwise
+    else:
+        return ll
+
+
+def neg_ll_linear(*args, **kwargs):
+    return -log_likelihood_linear(*args, **kwargs)
+
+
+def neg_ll_logistic(*args, **kwargs):
+    return -log_likelihood_logistic(*args, **kwargs)
+
+
+#
+# Log-posterior for linear and logistic regression
 #
 
 def log_posterior_linear(
@@ -557,7 +621,7 @@ def log_posterior_linear(
     X: np.ndarray,
     y: np.ndarray,
     theta_space: ThetaSpace,
-    log_prior: PriorType = log_prior_linear,
+    log_prior: PriorType = log_prior_linear_logistic,
     rng: Optional[RandomType] = None,
     return_pp: bool = False,
     return_ll: bool = False,
@@ -605,43 +669,63 @@ def log_posterior_linear(
         return lpos
 
 
-def log_likelihood_linear(
-    theta_tr,
-    X,
-    y,
-    theta_space,
-    return_ll=False
+def log_posterior_logistic(
+    theta_tr: np.ndarray,
+    X: np.ndarray,
+    y: np.ndarray,
+    theta_space: ThetaSpace,
+    log_prior: PriorType = log_prior_linear_logistic,
+    rng: Optional[RandomType] = None,
+    return_pp: bool = False,
+    return_ll: bool = False,
+    prior_kwargs: Dict = {},
 ):
-    n = X.shape[0]
-    p, beta, tau, alpha0, sigma2 = \
-        theta_space.slice_params(theta_tr, transform='backward')
+    if rng is None:
+        rng = np.random.default_rng()
 
-    idx = np.abs(theta_space.grid - tau[:, np.newaxis]).argmin(1)
-    X_tau = X[:, idx]
-    log_sigma = LogSq().forward(sigma2)
+    # Compute log-prior
+    lp = log_prior(theta_tr, X, y, theta_space, **prior_kwargs)
 
-    ll = (-n*log_sigma
-          - np.linalg.norm(y - alpha0 - X_tau@beta)**2/(2*sigma2))
+    if not np.isfinite(lp):
+        if return_pp and return_ll:
+            return (-np.inf, np.full_like(y, -1.0),
+                    np.full_like(y, -1), np.full_like(y, -np.inf))
+        elif return_pp:
+            return -np.inf, np.full_like(y, -1.0), np.full_like(y, -1)
+        elif return_ll:
+            return -np.inf, np.full_like(y, -np.inf)
+        else:
+            return -np.inf
 
+    # Compute log-likelihood (and possibly pointwise log-likelihood)
     if return_ll:
-        # Add constant term so that it is the genuine log-probability
-        ll_pointwise = (-log_sigma - 0.5*np.log(2*np.pi)
-                        - (y - alpha0 - X_tau@beta)**2/(2*sigma2))
-        return ll, ll_pointwise
+        ll, ll_pointwise = log_likelihood_logistic(
+            theta_tr, X, y, theta_space, return_ll)
     else:
-        return ll
+        ll = log_likelihood_logistic(theta_tr, X, y, theta_space, return_ll)
 
+    # Compute log-posterior
+    lpos = lp + ll
 
-def neg_ll_linear(*args, **kwargs):
-    return -log_likelihood_linear(*args, **kwargs)
+    # Compute posterior predictive samples
+    if return_pp:
+        theta = theta_space.backward(theta_tr)
+        pp_p, pp_y = generate_response_logistic(
+            X, theta, theta_space, return_prob=True, rng=rng)
 
+    # Return information
+    if return_pp and return_ll:
+        return lpos, pp_p, pp_y, ll_pointwise
+    elif return_pp:
+        return lpos, pp_p, pp_y
+    elif return_ll:
+        return lpos, ll_pointwise
+    else:
+        return lpos
 
-#####
-
-def neg_ll_logistic(*args, **kwargs):
-    pass
-
-#####
+#
+# Linear and logistic regression models for pymc
+#
 
 
 def make_model_linear_pymc(
