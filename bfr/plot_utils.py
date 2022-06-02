@@ -3,6 +3,7 @@
 import arviz as az
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 
 
 def plot_dataset_regression(
@@ -153,7 +154,7 @@ def plot_evolution(trace, names):
     axes[-1].set_xlabel("step")
 
 
-def plot_ppc(idata, n_samples=None, ax=None, legend=False, **kwargs):
+def plot_pp_linear(idata, n_samples=None, ax=None, legend=False, **kwargs):
     if ax is None:
         fig, ax = plt.subplots()
 
@@ -163,3 +164,126 @@ def plot_ppc(idata, n_samples=None, ax=None, legend=False, **kwargs):
         ax.axvline(idata.observed_data["y_obs"].mean(), ls="--",
                    color="r", lw=2, label="Observed mean")
         ax.legend()
+
+
+def plot_pp_logistic(idata, ax=None, legend=False, **kwargs):
+    pp_y = idata.posterior_predictive['y_star'].to_numpy()
+    n_success = pp_y.reshape(-1, pp_y.shape[-1]).sum(axis=1)
+
+    ax.set_yticks([])
+    ax.tick_params(labelsize=8)
+    ax.set_title("T = No. of successes")
+    az.plot_dist(n_success, label=r"$T(Y^*)$", ax=ax, **kwargs)
+
+    if legend:
+        ax.axvline(
+            n_success.mean(), ls="--", color="orange",
+            lw=2, label=r"$\overline{T(Y^*)}$")
+        if "observed_data" in idata:
+            ax.axvline(
+                idata.observed_data['y_obs'].sum(), ls="--", color="red",
+                lw=2, label=r"T(Y)")
+        ax.legend()
+
+
+def plot_checks_linear(
+    idata,
+    test=False,
+    n_samples=500,
+    figsize=(10, 4)
+):
+    fig, axs = plt.subplots(1, 2, figsize=figsize)
+
+    if test:
+        X_str = "X_{test}"
+        y_str = "Y_{test}"
+    else:
+        X_str = "X"
+        y_str = "Y"
+
+    plt.suptitle(fr"Posterior predictive checks on ${X_str}$")
+
+    plot_pp_linear(
+        idata,
+        n_samples=n_samples,
+        ax=axs[0],
+        data_pairs={'y_obs': 'y_star'}
+    )
+
+    # Plot statistics implied in Bayesian p-values
+    az.plot_bpv(
+        idata,
+        kind='t_stat',
+        t_stat='mean',
+        ax=axs[1],
+        plot_mean=False,
+        data_pairs={'y_obs': 'y_star'},
+        bpv=False
+    )
+    if "observed_data" in idata:
+        y = idata.observed_data["y_obs"]
+        axs[1].axvline(
+            y.mean(),
+            ls="--",
+            color="r",
+            lw=2,
+            label=fr"$\bar {y_str}$"
+        )
+    handles, labels = axs[1].get_legend_handles_labels()
+    handles.extend([
+        Line2D([0], [0], label=fr"Distribution of $\bar {y_str}^*$")])
+    axs[1].legend(handles=handles)
+
+
+def plot_checks_logistic(
+    idata,
+    test=False,
+    figsize=(10, 4)
+):
+    fig, axs = plt.subplots(1, 2, figsize=figsize)
+
+    if test:
+        X_str = "X_{test}"
+        y_str = "Y_{test}"
+    else:
+        X_str = "X"
+        y_str = "Y"
+
+    plt.suptitle(fr"Posterior predictive checks on ${X_str}$")
+
+    # Plot posterior predictive
+    plot_pp_logistic(
+        idata,
+        ax=axs[0],
+        legend=True
+    )
+
+    # Plot statistics implied in Bayesian p-values
+    az.plot_bpv(
+        idata,
+        kind='t_stat',
+        t_stat='mean',
+        ax=axs[1],
+        plot_mean=False,
+        data_pairs={'y_obs': 'y_star'},
+        bpv=False
+    )
+    if "observed_data" in idata:
+        y = idata.observed_data['y_obs']
+    axs[1].axvline(
+        y.mean(),
+        ls="--",
+        color="r",
+        lw=2,
+        label=fr"$\bar {y_str}$"
+    )
+    handles, labels = axs[1].get_legend_handles_labels()
+    handles.extend([
+        Line2D([0], [0], label=fr"Distribution of $\bar {y_str}^*$")])
+    axs[1].legend(handles=handles)
+
+    # Separation plot
+    az.plot_separation(
+        idata, y="y_obs", y_hat="p_star",
+        y_hat_line=True, figsize=(10, 1), legend=False)
+    plt.title("Separation plot", fontsize=12)

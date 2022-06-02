@@ -26,7 +26,7 @@ from sklearn.base import (BaseEstimator, ClassifierMixin, RegressorMixin,
                           TransformerMixin)
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.utils.validation import check_is_fitted
-from utils import HandleLogger, check_random_state, fdata_to_numpy, mode_fn
+from utils import HandleLogger, check_random_state, fdata_to_numpy, mode_fn, threshold
 
 DataType = Union[
     FData,
@@ -109,39 +109,33 @@ class BayesianRKHSFRegression(
             if not callable(strategy) and ts.include_p:
                 self._n_components_default_pe[strategy] = theta_hat[ts.p_idx]
 
-        elif 'posterior' in strategy:
-            if self.kind == 'linear':
-                pp_test = generate_pp(
-                    self.idata_,
-                    X,
-                    ts,
-                    self.thin_pp,
-                    kind=self.kind,
-                    rng=self.rng_,
-                    verbose=self.verbose,
-                )
-                y_pred = pp_test.mean(axis=(0, 1))
-            else:  # logistic
-                pp_test_p, pp_test_y = generate_pp(
-                    self.idata_,
-                    X,
-                    ts,
-                    self.thin_pp,
-                    kind=self.kind,
-                    rng=self.rng_,
-                    verbose=self.verbose,
-                )
-                if strategy == 'posterior_mean':
-                    y_pred = pp_test_p.mean(axis=(0, 1))
-                elif strategy == 'posterior_vote':
-                    y_pred = pp_test_y.mean(axis=(0, 1))
-                else:
-                    raise ValueError(
-                        "Incorrect value for parameter 'strategy'.")
+        elif self.kind == 'linear' and strategy == 'posterior_mean':
+            pp_test = generate_pp(
+                self.idata_,
+                X,
+                ts,
+                self.thin_pp,
+                kind=self.kind,
+                rng=self.rng_,
+                verbose=self.verbose,
+            )
+            y_pred = pp_test.mean(axis=(0, 1))
+        elif self.kind == 'logistic' and strategy in self.default_strategies:
+            pp_test_p, pp_test_y = generate_pp(
+                self.idata_,
+                X,
+                ts,
+                self.thin_pp,
+                kind=self.kind,
+                rng=self.rng_,
+                verbose=self.verbose,
+            )
+            if strategy == 'posterior_mean':
+                y_pred = pp_test_p.mean(axis=(0, 1))
+            elif strategy == 'posterior_vote':
+                y_pred = pp_test_y.mean(axis=(0, 1))
 
-                y_pred[..., y_pred >= 0.5] = 1
-                y_pred[..., y_pred < 0.5] = 0
-                y_pred = y_pred.astype(int)
+            y_pred = threshold(y_pred)
         else:
             raise ValueError(
                 "Incorrect value for parameter 'strategy'.")
@@ -321,7 +315,7 @@ class BayesianRKHSFRegression(
         ts = self.theta_space
 
         if self.verbose > 0:
-            print(f"[BFLinReg] Discarding the first {self.burn_} samples...")
+            print(f"[BRKHSFReg] Discarding the first {self.burn_} samples...")
 
         # Burn-in and thinning
         idata_new = idata.sel(draw=slice(self.burn_, None, self.thin))
@@ -330,6 +324,10 @@ class BayesianRKHSFRegression(
         if ts.include_p:
             idata_new.posterior[ts.names[ts.p_idx]] = \
                 np.rint(idata_new.posterior[ts.names[ts.p_idx]]).astype(int)
+
+        if self.kind == 'logistic' and 'y_star' in idata.posterior_predictive:
+            idata_new.posterior_predictive['y_star'] = \
+                np.rint(idata_new.posterior_predictive['y_star']).astype(int)
 
         return idata_new
 
@@ -357,7 +355,7 @@ class BayesianRKHSFRegression(
 
     def _compute_mle(self, X, y):
         if self.verbose > 1:
-            print("[BFLinReg] Computing MLE...")
+            print("[BRKHSFReg] Computing MLE...")
         ts_fixed = self.theta_space.copy_p_fixed()
 
         mle, _ = compute_mle(
@@ -798,6 +796,7 @@ class BFLinearEmcee(
     RegressorMixin
 ):
     kind = 'linear'
+    default_strategies = ['posterior_mean']
 
 
 class BFLogisticEmcee(
@@ -805,6 +804,7 @@ class BFLogisticEmcee(
     ClassifierMixin
 ):
     kind = 'logistic'
+    default_strategies = ['posterior_mean', 'posterior_vote']
 
 
 INCLUDE = False

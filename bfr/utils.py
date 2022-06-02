@@ -112,6 +112,14 @@ def fdata_to_numpy(X, grid):
     return X
 
 
+def threshold(y, th=0.5):
+    y_th = np.copy(y).astype(int)
+    y_th[..., y >= th] = 1
+    y_th[..., y < th] = 0
+
+    return y_th
+
+
 def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
     """All the pp arrays must have the same shape (the shape of y_obs)."""
     dim_name = "prediction"
@@ -216,7 +224,7 @@ def logistic_regression_metrics(
         acc
     ]
 
-    df.sort_values(df.columns[sort_by], inplace=True)
+    df.sort_values(df.columns[sort_by], inplace=True, ascending=False)
 
     return df
 
@@ -385,6 +393,71 @@ def multiple_linear_regression_cv(
     return df_metrics
 
 
+def multiple_logistic_regression_cv(
+    X,
+    y,
+    X_test,
+    y_test,
+    folds,
+    classifiers=[],
+    n_jobs=1,
+    prefix="emcee",
+    pe='mode',
+    df=None,
+    sort_by=-1,
+    verbose=False,
+    random_state=None,
+):
+    if len(classifiers) == 0:
+        clf_lst = []
+        Cs = np.logspace(-4, 4, 20)
+        params_clf = {"clf__C": Cs}
+        params_svm = {"clf__gamma": ['auto', 'scale']}
+
+        # Emcee+LR
+        clf_lst.append((
+            f"{prefix}_{pe}+sk_logistic",
+            Pipeline([
+                ("clf", LogisticRegression(random_state=random_state))]),
+            params_clf
+        ))
+
+        # Emcee+SVM Linear
+        clf_lst.append((
+            f"{prefix}_{pe}+sk_svm_lin",
+            Pipeline([
+                ("clf", LinearSVC(random_state=random_state))]),
+            params_clf
+        ))
+
+        # Emcee+SVM RBF
+        clf_lst.append((
+            f"{prefix}_{pe}+sk_svm_rbf",
+            Pipeline([
+                ("clf", SVC(kernel='rbf'))]),
+            {**params_svm, **params_clf}
+        ))
+
+    else:
+        clf_lst = classifiers
+
+    df_metrics, _ = cv_sk(
+        clf_lst,
+        X,
+        y,
+        X_test,
+        y_test,
+        folds,
+        kind='logistic',
+        n_jobs=n_jobs,
+        df=df,
+        sort_by=sort_by,
+        verbose=verbose
+    )
+
+    return df_metrics
+
+
 def run_bayesian_model(
     estimator,
     X,
@@ -394,12 +467,20 @@ def run_bayesian_model(
     folds,
     n_jobs=1,
     sort_by=-2,
-    prefix="emcee",
+    kind='linear',
+    prefix='emcee',
     compute_metrics=True,
     verbose=False,
     notebook=False,
     random_state=None,
 ):
+    if kind == 'linear':
+        metrics_fn = linear_regression_metrics
+        multiple_regression_cv_fn = multiple_linear_regression_cv
+    else:
+        metrics_fn = logistic_regression_metrics
+        multiple_regression_cv_fn = multiple_logistic_regression_cv
+
     estimator.fit(X, y)
 
     if verbose:
@@ -416,18 +497,22 @@ def run_bayesian_model(
 
         # -- Compute metrics using several point estimates
 
-        y_pred_pp = estimator.predict(X_test, strategy='posterior_mean')
-        df_metrics = linear_regression_metrics(
-            y_test,
-            y_pred_pp,
-            estimator.n_components("posterior_mean"),
-            prefix + "_posterior_mean",
-            sort_by=sort_by
-        )
+        df_metrics = None
+
+        for strategy in estimator.default_strategies:
+            y_pred_pp = estimator.predict(X_test, strategy=strategy)
+            df_metrics = metrics_fn(
+                y_test,
+                y_pred_pp,
+                estimator.n_components(strategy),
+                prefix + "_" + strategy,
+                df=df_metrics,
+                sort_by=sort_by
+            )
 
         for pe in estimator.default_point_estimates:
             y_pred_pe = estimator.predict(X_test, strategy=pe)
-            df_metrics = linear_regression_metrics(
+            df_metrics = metrics_fn(
                 y_test,
                 y_pred_pe,
                 estimator.n_components(pe),
@@ -442,7 +527,7 @@ def run_bayesian_model(
             X_red = estimator.transform(X, pe=pe)
             X_test_red = estimator.transform(X_test, pe=pe)
 
-            df_metrics = multiple_linear_regression_cv(
+            df_metrics = multiple_regression_cv_fn(
                 X_red,
                 y,
                 X_test_red,
@@ -831,7 +916,7 @@ def logistic_regression_comparison_suite(
                            ("data_matrix", DataMatrix()),
                            ("selector", FeatureSelector()),
                            ("clf", LogisticRegression(
-                                        random_state=random_state))]),
+                               random_state=random_state))]),
                        {**params_clf, **params_select}
                         ))
 
@@ -840,7 +925,7 @@ def logistic_regression_comparison_suite(
                        Pipeline([
                            ("dim_red", FPCA()),  # Retains scores only
                            ("clf", LogisticRegression(
-                                        random_state=random_state))]),
+                               random_state=random_state))]),
                        {**params_dim_red, **params_clf}
                         ))
 
@@ -850,7 +935,7 @@ def logistic_regression_comparison_suite(
                            ("data_matrix", DataMatrix()),
                            ("dim_red", PCA(random_state=random_state)),
                            ("clf", LogisticRegression(
-                                        random_state=random_state))]),
+                               random_state=random_state))]),
                        {**params_dim_red, **params_clf}
                         ))
 
@@ -873,7 +958,7 @@ def logistic_regression_comparison_suite(
                            ("data_matrix", DataMatrix()),
                            ("dim_red", PLSRegressionWrapper()),
                            ("clf", LogisticRegression(
-                                        random_state=random_state))]),
+                               random_state=random_state))]),
                        {**params_dim_red, **params_clf}
                         ))
 
@@ -882,7 +967,7 @@ def logistic_regression_comparison_suite(
                        Pipeline([
                            ("var_sel", RKVS()),
                            ("clf", LogisticRegression(
-                                        random_state=random_state))]),
+                               random_state=random_state))]),
                        params_var_sel
                         ))
 
@@ -891,7 +976,7 @@ def logistic_regression_comparison_suite(
                        Pipeline([
                            ("var_sel", RMH()),
                            ("clf", LogisticRegression(
-                                        random_state=random_state))]),
+                               random_state=random_state))]),
                        {}
                         ))
 

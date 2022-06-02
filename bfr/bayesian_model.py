@@ -6,7 +6,7 @@ import numpy as np
 import pymc3 as pm
 import theano.tensor as tt
 from scipy.special import expit
-from utils import compute_mode_xarray
+from utils import compute_mode_xarray, threshold
 
 
 class Identity():
@@ -342,10 +342,7 @@ def generate_response_logistic(
         y = probability_to_label(y_lin, rng=rng)
     else:
         # sigmoid(x) >= 0.5 iff x >= 0
-        y = y_lin.copy()
-        y[..., y >= 0] = 1
-        y[..., y < 0] = 0
-        y = y.astype(int)
+        y = threshold(y_lin, 0.0)
 
     if return_prob:
         return expit(y_lin), y
