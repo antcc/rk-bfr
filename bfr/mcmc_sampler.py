@@ -26,8 +26,8 @@ from sklearn.base import (BaseEstimator, ClassifierMixin, RegressorMixin,
                           TransformerMixin)
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.utils.validation import check_is_fitted
-from utils import (HandleLogger, check_random_state, fdata_to_numpy, mode_fn,
-                   threshold)
+from utils import (HandleLogger, apply_threshold, check_random_state,
+                   fdata_to_numpy, mode_fn)
 
 DataType = Union[
     FData,
@@ -104,6 +104,7 @@ class BayesianRKHSFRegression(
                 strategy,
                 kind=self.kind,
                 skipna=ts.include_p,
+                th=self.threshold,
                 bw=bw
             )
 
@@ -135,8 +136,7 @@ class BayesianRKHSFRegression(
                 y_pred = pp_test_p.mean(axis=(0, 1))
             elif strategy == 'posterior_vote':
                 y_pred = pp_test_y.mean(axis=(0, 1))
-
-            y_pred = threshold(y_pred)
+            y_pred = apply_threshold(y_pred, self.threshold)
         else:
             raise ValueError(
                 "Incorrect value for parameter 'strategy'.")
@@ -434,6 +434,7 @@ class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
         mle_method: str = 'L-BFGS-B',
         mle_strategy: str = 'global',
         n_reps_mle: int = 4,
+        threshold: float = 0.5,
         n_jobs: int = 1,
         verbose: int = 0,
         progress_notebook: bool = False,
@@ -463,6 +464,7 @@ class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
         self.mle_method = mle_method
         self.mle_strategy = mle_strategy
         self.n_reps_mle = n_reps_mle
+        self.threshold = threshold
         self.n_jobs = n_jobs
         self.verbose = verbose
         self.progress_notebook = progress_notebook
@@ -563,7 +565,8 @@ class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
             if self.verbose > 0:
                 progress = 'notebook' if self.progress_notebook else True
                 if self.progress_kwargs is None:
-                    self.progress_kwargs = {"desc": f"[{self.__class__.__name__}] MCMC"}
+                    self.progress_kwargs = \
+                        {"desc": f"[{self.__class__.__name__}] MCMC"}
             else:
                 progress = False
 
@@ -830,16 +833,17 @@ class BayesianRKHSFRegressionPymc(BayesianRKHSFRegression):
         g: float = 5.0,
         eta: float = 1.0,
         prior_p: Optional[Dict] = None,
+        n_iter_warmup: int = 100,
         step_fn: Optional[StepType] = None,
         step_kwargs: Dict = {},
-        n_iter_warmup: int = 1000,
         thin: int = 1,
         thin_pp: int = 5,
-        burn: int = 0,
+        burn: int = 100,
         mle_precomputed: Optional[np.ndarray] = None,
         mle_method: str = 'L-BFGS-B',
         mle_strategy: str = 'global',
         n_reps_mle: int = 4,
+        threshold: float = 0.5,
         n_jobs: int = 1,
         verbose: int = 0,
         random_state: Optional[RandomType] = None
@@ -863,6 +867,7 @@ class BayesianRKHSFRegressionPymc(BayesianRKHSFRegression):
         self.mle_method = mle_method
         self.mle_strategy = mle_strategy
         self.n_reps_mle = n_reps_mle
+        self.threshold = threshold
         self.n_jobs = n_jobs
         self.verbose = verbose
         self.random_state = random_state

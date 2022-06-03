@@ -112,7 +112,7 @@ def fdata_to_numpy(X, grid):
     return X
 
 
-def threshold(y, th=0.5):
+def apply_threshold(y, th=0.5):
     y_th = np.copy(y).astype(int)
     y_th[..., y >= th] = 1
     y_th[..., y < th] = 0

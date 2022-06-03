@@ -444,7 +444,7 @@ def get_reference_models_linear(X, y, seed):
 
 def get_reference_models_logistic(X, y, seed):
     Cs = np.logspace(-4, 4, 20)
-    n_selected = [5, 10, 15, 20, 25, X.shape[1]]
+    n_selected = [5, 10, 15, 20, 25, len(X.grid_points[0])]
     n_components = [2, 3, 4, 5, 10]
     n_basis_bsplines = [8, 10, 12, 14, 16]
     n_basis_fourier = [3, 5, 7, 9, 11]
@@ -639,7 +639,7 @@ def bayesian_cv(
             mle_theta = mle_wrapper(X, y, ts_fixed)
 
     # Perform K-fold cross-validation for the parameters 'p' and 'η'
-    for i, (train_cv, test_cv) in enumerate(cv_folds.split(X)):
+    for i, (train_cv, test_cv) in enumerate(cv_folds.split(X, y)):
         X_train_cv, X_test_cv = X[train_cv], X[test_cv]
         y_train_cv, y_test_cv = y[train_cv], y[test_cv]
 
@@ -865,7 +865,8 @@ def main():
         grid, include_p, theta_names, tau_range)
     if PRECOMPUTE_MLE:
         mle_wrapper = get_mle_wrapper(
-            mle_method, mle_strategy, args.n_reps_mle, args.n_cores, rng)
+            mle_method, mle_strategy, args.kind,
+            args.n_reps_mle, args.n_cores, rng)
     else:
         mle_wrapper = None
     bayesian_model_wrapper = get_bayesian_model_wrapper(
@@ -975,6 +976,7 @@ def main():
                 p_max,
                 all_estimates,
                 point_estimates,
+                args.kind,
                 est_multiple,
                 precompute_mle=PRECOMPUTE_MLE,
                 verbose=VERBOSE
@@ -1058,12 +1060,12 @@ def main():
     df_metrics_ref = pd.DataFrame(
         mean_score_ref,
         columns=["Estimator", "Mean " + score_column, "SD"]
-    ).sort_values("Mean " + score_column)
+    ).sort_values("Mean " + score_column, ascending=args.kind == "linear")
 
     df_metrics_bayesian_var_sel = pd.DataFrame(
         mean_score_bayesian_var_sel,
         columns=["Estimator", "Mean " + score_column, "SD", "Main strategy"]
-    ).sort_values("Mean " + score_column)
+    ).sort_values("Mean " + score_column, ascending=args.kind == "linear")
 
     ##
     # PRINT RESULTS
@@ -1093,7 +1095,7 @@ def main():
         f = open(PRINT_PATH + filename + ".results", 'w')
         sys.stdout = f  # Change the standard output to the file we created
 
-    print("\n*** Bayesian-RKHS Functional {capitalize(args.kind)} "
+    print(f"\n*** Bayesian-RKHS Functional {args.kind.capitalize()} "
           "Regression ***\n")
 
     # Print dataset information

@@ -6,7 +6,7 @@ import numpy as np
 import pymc3 as pm
 import theano.tensor as tt
 from scipy.special import expit
-from utils import compute_mode_xarray, threshold
+from utils import compute_mode_xarray, apply_threshold
 
 
 class Identity():
@@ -330,6 +330,7 @@ def generate_response_logistic(
     theta_space,
     noise=True,
     return_prob=False,
+    th=0.5,
     rng=None
 ):
     """Generate a logistic response Y given X and θ.
@@ -341,8 +342,11 @@ def generate_response_logistic(
     if noise:
         y = probability_to_label(y_lin, rng=rng)
     else:
-        # sigmoid(x) >= 0.5 iff x >= 0
-        y = threshold(y_lin, 0.0)
+        if th == 0.5:
+            # sigmoid(x) >= 0.5 iff x >= 0
+            y = apply_threshold(y_lin, 0.0)
+        else:
+            y = apply_threshold(expit(y_lin), th)
 
     if return_prob:
         return expit(y_lin), y
@@ -400,7 +404,8 @@ def generate_pp(
     # Generate responses following the model
     if kind == 'logistic':
         p_star, y_star = generate_response_logistic(
-            X, theta, theta_space, noise=True, return_prob=True, rng=rng
+            X, theta, theta_space, noise=True,
+            return_prob=True, rng=rng
         )
     else:
         y_star = generate_response_linear(
@@ -457,6 +462,7 @@ def point_predict(
     estimator_fn='mode',
     kind='linear',
     skipna=False,
+    th=0.5,
     bw='experimental'
 ):
     theta_hat = point_estimate(
@@ -466,7 +472,7 @@ def point_predict(
             X, theta_hat, theta_space, noise=False)
     else:
         y_pred = generate_response_logistic(
-            X, theta_hat, theta_space, noise=False)
+            X, theta_hat, theta_space, noise=False, th=th)
 
     return y_pred, theta_hat
 
