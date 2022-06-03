@@ -154,7 +154,14 @@ def plot_evolution(trace, names):
     axes[-1].set_xlabel("step")
 
 
-def plot_pp_linear(idata, n_samples=None, ax=None, legend=False, **kwargs):
+def plot_pp_linear(
+    idata,
+    y_str="y",
+    n_samples=None,
+    ax=None,
+    legend=False,
+    **kwargs
+):
     if ax is None:
         fig, ax = plt.subplots()
 
@@ -166,24 +173,24 @@ def plot_pp_linear(idata, n_samples=None, ax=None, legend=False, **kwargs):
         ax.legend()
 
 
-def plot_pp_logistic(idata, ax=None, legend=False, **kwargs):
+def plot_pp_logistic(idata, y_str="y", ax=None, legend=False, **kwargs):
     pp_y = idata.posterior_predictive['y_star'].to_numpy()
     n_success = pp_y.reshape(-1, pp_y.shape[-1]).sum(axis=1)
 
     ax.set_yticks([])
     ax.tick_params(labelsize=8)
     ax.set_title("T = No. of successes")
-    az.plot_dist(n_success, label=r"$T(Y^*)$", ax=ax, **kwargs)
+    az.plot_dist(n_success, label=fr"$T({y_str}^*)$", ax=ax, **kwargs)
 
     if legend:
         ax.axvline(
             n_success.mean(), ls="--", color="orange",
-            lw=2, label=r"$\overline{T(Y^*)}$")
+            lw=2, label=fr"$Mean(T({y_str}^*))$")
         if "observed_data" in idata:
             ax.axvline(
-                idata.observed_data['y_obs'].sum(), ls="--", color="red",
-                lw=2, label=r"T(Y)")
-        ax.legend()
+                idata.observed_data['y_obs'].sum(), ls="--",
+                color="red", lw=2, label=fr"$T({y_str})$")
+        ax.legend(fontsize=10)
 
 
 def plot_checks_linear(
@@ -220,6 +227,16 @@ def plot_checks_linear(
         data_pairs={'y_obs': 'y_star'},
         bpv=False
     )
+
+    pp_y = idata.posterior_predictive['y_star'].to_numpy()
+    axs[1].axvline(
+        pp_y.mean(),
+        ls="--",
+        color="orange",
+        lw=2,
+        label=fr"$Mean(\bar {y_str}^*)$"
+    )
+
     if "observed_data" in idata:
         y = idata.observed_data["y_obs"]
         axs[1].axvline(
@@ -231,8 +248,8 @@ def plot_checks_linear(
         )
     handles, labels = axs[1].get_legend_handles_labels()
     handles.extend([
-        Line2D([0], [0], label=fr"Distribution of $\bar {y_str}^*$")])
-    axs[1].legend(handles=handles)
+        Line2D([0], [0], label=fr"$\bar {y_str}^*$")])
+    axs[1].legend(handles=handles, fontsize=10)
 
 
 def plot_checks_logistic(
@@ -254,8 +271,9 @@ def plot_checks_logistic(
     # Plot posterior predictive
     plot_pp_logistic(
         idata,
+        y_str=y_str,
         ax=axs[0],
-        legend=True
+        legend=True,
     )
 
     # Plot statistics implied in Bayesian p-values
@@ -268,19 +286,29 @@ def plot_checks_logistic(
         data_pairs={'y_obs': 'y_star'},
         bpv=False
     )
+
+    pp_y = idata.posterior_predictive['y_star'].to_numpy()
+    axs[1].axvline(
+        pp_y.mean(),
+        ls="--",
+        color="orange",
+        lw=2,
+        label=fr"$Mean(\bar {y_str}^*)$"
+    )
+
     if "observed_data" in idata:
         y = idata.observed_data['y_obs']
-    axs[1].axvline(
-        y.mean(),
-        ls="--",
-        color="r",
-        lw=2,
-        label=fr"$\bar {y_str}$"
-    )
+        axs[1].axvline(
+            y.mean(),
+            ls="--",
+            color="r",
+            lw=2,
+            label=fr"$\bar {y_str}$"
+        )
     handles, labels = axs[1].get_legend_handles_labels()
     handles.extend([
-        Line2D([0], [0], label=fr"Distribution of $\bar {y_str}^*$")])
-    axs[1].legend(handles=handles)
+        Line2D([0], [0], label=fr"$\bar {y_str}^*$")])
+    axs[1].legend(handles=handles, fontsize=10)
 
     # Separation plot
     az.plot_separation(

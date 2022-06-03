@@ -14,8 +14,8 @@ import numpy as np
 import pymc3 as pm
 from bayesian_model import (PriorType, RandomType, ThetaSpace, generate_pp,
                             log_posterior_linear, log_posterior_logistic,
-                            log_prior_linear_logistic,
-                            make_model_linear_pymc, point_estimate,
+                            log_prior_linear_logistic, make_model_linear_pymc,
+                            make_model_logistic_pymc, point_estimate,
                             point_predict)
 from mle import compute_mle
 from pymc3.step_methods.arraystep import BlockedStep
@@ -26,7 +26,8 @@ from sklearn.base import (BaseEstimator, ClassifierMixin, RegressorMixin,
                           TransformerMixin)
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.utils.validation import check_is_fitted
-from utils import HandleLogger, check_random_state, fdata_to_numpy, mode_fn, threshold
+from utils import (HandleLogger, check_random_state, fdata_to_numpy, mode_fn,
+                   threshold)
 
 DataType = Union[
     FData,
@@ -315,7 +316,8 @@ class BayesianRKHSFRegression(
         ts = self.theta_space
 
         if self.verbose > 0:
-            print(f"[BRKHSFReg] Discarding the first {self.burn_} samples...")
+            print(f"[{self.__class__.__name__}] Discarding the "
+                  f"first {self.burn_} samples...")
 
         # Burn-in and thinning
         idata_new = idata.sel(draw=slice(self.burn_, None, self.thin))
@@ -325,7 +327,7 @@ class BayesianRKHSFRegression(
             idata_new.posterior[ts.names[ts.p_idx]] = \
                 np.rint(idata_new.posterior[ts.names[ts.p_idx]]).astype(int)
 
-        if self.kind == 'logistic' and 'y_star' in idata.posterior_predictive:
+        if self.kind == 'logistic' and 'posterior_predictive' in idata:
             idata_new.posterior_predictive['y_star'] = \
                 np.rint(idata_new.posterior_predictive['y_star']).astype(int)
 
@@ -355,7 +357,7 @@ class BayesianRKHSFRegression(
 
     def _compute_mle(self, X, y):
         if self.verbose > 1:
-            print("[BRKHSFReg] Computing MLE...")
+            print(f"[{self.__class__.__name__}] Computing MLE...")
         ts_fixed = self.theta_space.copy_p_fixed()
 
         mle, _ = compute_mle(
@@ -546,7 +548,7 @@ class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
                 np.random.RandomState(random_seed).get_state()
 
             if self.verbose > 1:
-                print("[BRKHSFReg] MCMC warmup iterations...")
+                print(f"[{self.__class__.__name__}] MCMC warmup iterations...")
 
             # Warmup iterations
             if self.n_iter_warmup > 0:
@@ -561,7 +563,7 @@ class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
             if self.verbose > 0:
                 progress = 'notebook' if self.progress_notebook else True
                 if self.progress_kwargs is None:
-                    self.progress_kwargs = {"desc": "[BRKHSFReg] MCMC"}
+                    self.progress_kwargs = {"desc": f"[{self.__class__.__name__}] MCMC"}
             else:
                 progress = False
 
@@ -807,181 +809,199 @@ class BFLogisticEmcee(
     default_strategies = ['posterior_mean', 'posterior_vote']
 
 
-INCLUDE = False
-if INCLUDE:
-    class BayesianRKHSFRegressionPymc(BayesianRKHSFRegression):
-        """Bayesian functional linear regression.
+class BayesianRKHSFRegressionPymc(BayesianRKHSFRegression):
+    """Bayesian functional linear regression.
 
-        It uses 'pymc' as the underlying MCMC algorithm for
-        approximating the posterior distribution.
+    It uses 'pymc' as the underlying MCMC algorithm for
+    approximating the posterior distribution.
 
-        See [REFERENCE].
-        """
+    See [REFERENCE].
+    """
 
-        def __init__(
-            self,
-            theta_space: ThetaSpace = ThetaSpace(),
-            n_walkers: int = 2,
-            n_iter: int = 1000,
-            *,
-            model_fn: Optional[ModelType] = None,
-            model_kwargs: Dict = {},
-            b0: Union[str, np.ndarray] = 'mle',
-            g: float = 5.0,
-            eta: float = 1.0,
-            prior_p: Optional[Dict] = None,
-            step_fn: Optional[StepType] = None,
-            step_kwargs: Dict = {},
-            n_iter_warmup: int = 1000,
-            thin: int = 1,
-            thin_pp: int = 5,
-            burn: int = 0,
-            mle_precomputed: Optional[np.ndarray] = None,
-            mle_method: str = 'L-BFGS-B',
-            mle_strategy: str = 'global',
-            n_reps_mle: int = 4,
-            n_jobs: int = 1,
-            verbose: int = 0,
-            random_state: Optional[RandomType] = None
-        ) -> BayesianLinearRegressionPymc:
-            self.theta_space = theta_space
-            self.n_walkers = n_walkers
-            self.n_iter = n_iter
-            self.model_fn = model_fn
-            self.model_kwargs = model_kwargs
-            self.b0 = b0
-            self.g = g
-            self.eta = eta
-            self.prior_p = prior_p
-            self.step_fn = step_fn
-            self.step_kwargs = step_kwargs
-            self.n_iter_warmup = n_iter_warmup
-            self.thin = thin
-            self.thin_pp = thin_pp
-            self.burn = burn
-            self.mle_precomputed = mle_precomputed
-            self.mle_method = mle_method
-            self.mle_strategy = mle_strategy
-            self.n_reps_mle = n_reps_mle
-            self.n_jobs = n_jobs
-            self.verbose = verbose
-            self.random_state = random_state
+    def __init__(
+        self,
+        theta_space: ThetaSpace = ThetaSpace(),
+        n_walkers: int = 2,
+        n_iter: int = 1000,
+        *,
+        model_fn: Optional[ModelType] = None,
+        model_kwargs: Dict = {},
+        b0: Union[str, np.ndarray] = 'mle',
+        g: float = 5.0,
+        eta: float = 1.0,
+        prior_p: Optional[Dict] = None,
+        step_fn: Optional[StepType] = None,
+        step_kwargs: Dict = {},
+        n_iter_warmup: int = 1000,
+        thin: int = 1,
+        thin_pp: int = 5,
+        burn: int = 0,
+        mle_precomputed: Optional[np.ndarray] = None,
+        mle_method: str = 'L-BFGS-B',
+        mle_strategy: str = 'global',
+        n_reps_mle: int = 4,
+        n_jobs: int = 1,
+        verbose: int = 0,
+        random_state: Optional[RandomType] = None
+    ) -> BayesianRKHSFRegressionPymc:
+        self.theta_space = theta_space
+        self.n_walkers = n_walkers
+        self.n_iter = n_iter
+        self.model_fn = model_fn
+        self.model_kwargs = model_kwargs
+        self.b0 = b0
+        self.g = g
+        self.eta = eta
+        self.prior_p = prior_p
+        self.step_fn = step_fn
+        self.step_kwargs = step_kwargs
+        self.n_iter_warmup = n_iter_warmup
+        self.thin = thin
+        self.thin_pp = thin_pp
+        self.burn = burn
+        self.mle_precomputed = mle_precomputed
+        self.mle_method = mle_method
+        self.mle_strategy = mle_strategy
+        self.n_reps_mle = n_reps_mle
+        self.n_jobs = n_jobs
+        self.verbose = verbose
+        self.random_state = random_state
 
-        def fit(
-            self,
-            X: DataType,
-            y: np.ndarray
-        ) -> BayesianLinearRegressionPymc:
-            X, y = self._argcheck_X_y(X, y)
-            self.n_features_in_ = X.shape[1]
-            super().fit(X, y)
-            ts = self.theta_space
+    def fit(
+        self,
+        X: DataType,
+        y: np.ndarray
+    ) -> BayesianRKHSFRegressionPymc:
+        X, y = self._argcheck_X_y(X, y)
+        self.n_features_in_ = X.shape[1]
+        super().fit(X, y)
+        ts = self.theta_space
 
-            # Model creation
+        # Model creation
 
-            if self.model_fn is None:
-                model_kwargs = self._get_prior_kwargs(X, y)
-                self.model_ = make_model_linear_pymc(X, y, ts, **model_kwargs)
-
-            elif callable(self.model_fn):
-                self.model_ = self.model_fn(X, y, ts, **self.model_kwargs)
+        if self.model_fn is None:
+            model_kwargs = self._get_prior_kwargs(X, y)
+            if self.kind == 'linear':
+                self.model_ = \
+                    make_model_linear_pymc(X, y, ts, **model_kwargs)
             else:
-                raise ValueError("Invalid value for log_prior.")
+                self.model_ = \
+                    make_model_logistic_pymc(X, y, ts, **model_kwargs)
+        elif callable(self.model_fn):
+            self.model_ = self.model_fn(X, y, ts, **self.model_kwargs)
+        else:
+            raise ValueError("Invalid value for model_fn.")
 
-            # Set dimension names
+        # Set dimension names
 
-            dims = {f"{ts.names[ts.beta_idx_grouped]}": [ts.dim_name],
-                    f"{ts.names[ts.tau_idx_grouped]}": [ts.dim_name],
-                    "X_obs": ["observation", "value"],
-                    "y_obs": ["observation"]}
+        dims = {f"{ts.names[ts.beta_idx_grouped]}": [ts.dim_name],
+                f"{ts.names[ts.tau_idx_grouped]}": [ts.dim_name],
+                "X_obs": ["observation", "value"],
+                "y_obs": ["observation"]}
 
-            # Select samplers
+        # Select samplers
 
-            if self.step_fn is None:
-                step = None
-            else:
-                with self.model_:
-                    step = [self.step_fn(self.model_.cont_vars, **self.step_kwargs)]
-                    if ts.include_p:
-                        step.append(
-                            pm.CategoricalGibbsMetropolis(self.model_.disc_vars)
-                        )
-
-            # Select random seeds
-
-            seed = [self.rng_.integers(2**32) for _ in range(self.n_walkers)]
-
-            # Select initial points
-
-            if ts.include_p:
-                start = [{'p_cat': i % ts.p_max} for i in range(self.n_walkers)]
-            else:
-                start = None
-
-            # Run MCMC procedure
-
+        if self.step_fn is None:
+            step = None
+        else:
             with self.model_:
-                with HandleLogger(self.verbose):
-                    idata = pm.sample(
-                        self.n_iter,
-                        cores=self.n_jobs_,
-                        chains=self.n_walkers,
-                        start=start,
-                        tune=self.n_iter_warmup,
-                        step=step,
-                        random_seed=seed,
-                        return_inferencedata=True,
-                        progressbar=self.verbose > 0,
-                        idata_kwargs={"dims": dims}
+                step = [self.step_fn(self.model_.cont_vars, **self.step_kwargs)]
+                if ts.include_p:
+                    step.append(
+                        pm.CategoricalGibbsMetropolis(self.model_.disc_vars)
                     )
 
-                # Retain only relevant information
-                idata.posterior = idata.posterior[ts.names]
-                attrs = idata.posterior.attrs
-                trace = idata.posterior.to_stacked_array(
-                    new_dim="stack",
-                    sample_dims=("chain", "draw")
+        # Select random seeds
+
+        seed = [self.rng_.integers(2**32) for _ in range(self.n_walkers)]
+
+        # Select initial points
+
+        if ts.include_p:
+            start = [{'p_cat': i % ts.p_max} for i in range(self.n_walkers)]
+        else:
+            start = None
+
+        # Run MCMC procedure
+
+        with self.model_:
+            with HandleLogger(self.verbose):
+                idata = pm.sample(
+                    self.n_iter,
+                    cores=self.n_jobs_,
+                    chains=self.n_walkers,
+                    start=start,
+                    tune=self.n_iter_warmup,
+                    step=step,
+                    random_seed=seed,
+                    return_inferencedata=True,
+                    progressbar=self.verbose > 0,
+                    idata_kwargs={"dims": dims}
                 )
-                if ts.include_p:
-                    self._discard_components(trace.values)
-                idata.posterior = trace.to_unstacked_dataset(dim="stack")[ts.names]
-                idata.posterior.attrs = attrs
 
-                # Get data (after burn-in and thinning)
-                self.burn_ = np.minimum(self.burn, self.n_iter//10)
-                idata = self._tidy_idata(idata)
+            # Retain only relevant information
+            idata.posterior = idata.posterior[ts.names]
+            attrs = idata.posterior.attrs
+            trace = idata.posterior.to_stacked_array(
+                new_dim="stack",
+                sample_dims=("chain", "draw")
+            )
+            if ts.include_p:
+                self._discard_components(trace.values)
+            idata.posterior = trace.to_unstacked_dataset(dim="stack")[ts.names]
+            idata.posterior.attrs = attrs
 
-                # Save trace
-                self.idata_ = idata
-                self._trace = trace.values
+            # Get data (after burn-in and thinning)
+            self.burn_ = np.minimum(self.burn, self.n_iter//10)
+            idata = self._tidy_idata(idata)
 
-            return self
+            # Save trace
+            self.idata_ = idata
+            self._trace = trace.values
 
-        def mean_acceptance(self):
-            check_is_fitted(self)
+        return self
 
-            stats = self.idata_.sample_stats
-            if "acceptance_rate" in stats:
-                return stats.acceptance_rate.mean().values
-            elif "accepted" in stats:
-                return stats.accepted.mean().values
-            else:
-                warnings.warn("The sampler does not provide acceptance stats.")
-                return np.nan
+    def mean_acceptance(self):
+        check_is_fitted(self)
 
-        def get_trace(self, burn=None, thin=None, flat=False):
-            check_is_fitted(self)
-            if burn is None:
-                burn = self.burn_
-            if thin is None:
-                thin = self.thin
+        stats = self.idata_.sample_stats
+        if "acceptance_rate" in stats:
+            return stats.acceptance_rate.mean().values
+        elif "accepted" in stats:
+            return stats.accepted.mean().values
+        else:
+            warnings.warn("The sampler does not provide acceptance stats.")
+            return np.nan
 
-            trace = np.copy(self._trace[:, burn::thin, :])
+    def get_trace(self, burn=None, thin=None, flat=False):
+        check_is_fitted(self)
+        if burn is None:
+            burn = self.burn_
+        if thin is None:
+            thin = self.thin
 
-            if flat:
-                trace = trace.reshape(-1, trace.shape[-1])
+        trace = np.copy(self._trace[:, burn::thin, :])
 
-            return trace
+        if flat:
+            trace = trace.reshape(-1, trace.shape[-1])
 
-        def to_graphviz(self):
-            return pm.model_graph.model_to_graphviz(self.model_)
+        return trace
+
+    def to_graphviz(self):
+        return pm.model_graph.model_to_graphviz(self.model_)
+
+
+class BFLinearPymc(
+    BayesianRKHSFRegressionPymc,
+    RegressorMixin
+):
+    kind = 'linear'
+    default_strategies = ['posterior_mean']
+
+
+class BFLogisticPymc(
+    BayesianRKHSFRegressionPymc,
+    ClassifierMixin
+):
+    kind = 'logistic'
+    default_strategies = ['posterior_mean', 'posterior_vote']

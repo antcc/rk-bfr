@@ -234,13 +234,13 @@ def bayesian_variable_selection_predict(
     y_train,
     X_test,
     pe,
-    reg_bayesian,
-    reg_linear
+    est_bayesian,
+    est_multiple
 ):
-    X_train_red = reg_bayesian.transform(X_train, pe=pe)
-    X_test_red = reg_bayesian.transform(X_test, pe=pe)
-    reg_linear.fit(X_train_red, y_train)
-    y_pred = reg_linear.predict(X_test_red)
+    X_train_red = est_bayesian.transform(X_train, pe=pe)
+    X_test_red = est_bayesian.transform(X_test, pe=pe)
+    est_multiple.fit(X_train_red, y_train)
+    y_pred = est_multiple.predict(X_test_red)
 
     return y_pred
 

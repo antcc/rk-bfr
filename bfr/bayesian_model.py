@@ -720,10 +720,10 @@ def log_posterior_logistic(
     else:
         return lpos
 
+
 #
 # Linear and logistic regression models for pymc
 #
-
 
 def make_model_linear_pymc(
     X,
@@ -787,5 +787,75 @@ def make_model_linear_pymc(
         expected_obs = alpha0 + pm.math.matrix_dot(X_tau, beta_red)
 
         y_obs = pm.Normal('y_obs', mu=expected_obs, sigma=sigma, observed=y)
+
+    return model
+
+
+def make_model_logistic_pymc(
+    X,
+    y,
+    theta_space,
+    *,
+    b0,
+    g,
+    eta,
+    prior_p=None,
+):
+    n, N = X.shape
+    ts = theta_space
+    p_max = theta_space.p_max
+
+    with pm.Model() as model:
+        X_pm = pm.Data('X_obs', X)
+
+        if ts.include_p:
+            p_cat = pm.Categorical('p_cat', p=list(prior_p.values()))
+            p = pm.Deterministic(ts.names[ts.p_idx], p_cat + 1)
+        else:
+            p = p_max
+
+        alpha0_and_log_sigma = pm.DensityDist(
+            ts.names[ts.alpha0_idx] + "_and_" + ts.names_ttr[ts.sigma2_idx],
+            logp=lambda x: 0,
+            shape=(2,)
+        )
+
+        alpha0 = pm.Deterministic(
+            ts.names[ts.alpha0_idx], alpha0_and_log_sigma[0])
+
+        log_sigma = alpha0_and_log_sigma[1]
+        sigma = pm.math.exp(log_sigma)
+        sigma2 = pm.Deterministic(ts.names[ts.sigma2_idx], sigma**2)
+
+        tau = pm.Uniform(
+            ts.names[ts.tau_idx_grouped], 0.0, 1.0, shape=(p_max,))
+        tau_red = tau[:p]
+
+        idx = np.abs(ts.grid - tau_red[:, np.newaxis]).argmin(1)
+        X_tau = X_pm[:, idx]
+
+        G_tau = pm.math.matrix_dot(X_tau.T, X_tau)
+        G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
+        G_tau_reg = G_tau + eta * \
+            tt.max(tt.nlinalg.eigh(G_tau)[0])*tt.eye(p)
+        G_log_det = pm.math.logdet(G_tau_reg)
+
+        def beta_lprior(value):
+            b = (value - b0)[:p]
+
+            return (0.5*G_log_det
+                    - p*log_sigma
+                    - pm.math.matrix_dot(b.T, G_tau_reg, b)/(2.*g*sigma2))
+
+        beta = pm.DensityDist(
+            ts.names[ts.beta_idx_grouped], logp=beta_lprior, shape=(p_max,))
+        beta_red = beta[:p]
+
+        px = pm.Deterministic(
+            'p_star',
+            pm.math.invlogit(alpha0 + pm.math.matrix_dot(X_tau, beta_red))
+        )
+
+        y_obs = pm.Bernoulli('y_obs', p=px, observed=y)
 
     return model
