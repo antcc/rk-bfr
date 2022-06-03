@@ -1108,7 +1108,7 @@ def main():
     print("N_reps MLE:", args.n_reps_mle)
 
     print("\n-- MODEL GENERATION --")
-    print(f"Total samples: {args.n_samples}")
+    print(f"Total samples: {len(X_fd)}")
     print(f"Grid size: {len(X_fd.grid_points[0])}")
     print(f"Train size: {len(X_train)}")
     if args.smoothing == "nw":
