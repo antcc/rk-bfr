@@ -48,7 +48,7 @@ pd.set_option("display.precision", 3)
 pd.set_option('display.max_columns', 80)
 
 # Script behavior
-RUN_REF_ALGS = True
+RUN_REF_ALGS = False
 VERBOSE = True
 PRECOMPUTE_MLE = True
 PRINT_TO_FILE = False
@@ -145,7 +145,7 @@ def get_arg_parser():
         help="number of tune/warmup iterations in MCMC algorithm"
     )
     parser.add_argument(
-        "--n-reps-mle", type=int, default=8,
+        "--n-reps-mle", type=int, default=4,
         help="number of random repetitions of MLE computation"
     )
     parser.add_argument(
@@ -636,12 +636,15 @@ def bayesian_cv(
         theta_space = theta_space_wrapper(p_max)
         if precompute_mle:
             ts_fixed = theta_space.copy_p_fixed()
-            mle_theta = mle_wrapper(X, y, ts_fixed)
 
     # Perform K-fold cross-validation for the parameters 'p' and 'η'
     for i, (train_cv, test_cv) in enumerate(cv_folds.split(X, y)):
         X_train_cv, X_test_cv = X[train_cv], X[test_cv]
         y_train_cv, y_test_cv = y[train_cv], y[test_cv]
+
+        if include_p and precompute_mle:
+            mle_theta = mle_wrapper(
+                X_train_cv, y_train_cv, ts_fixed)
 
         # Iterate over all possible pairs of hyperparameters
         for idx, param in enumerated_product(*params_cv):
@@ -653,7 +656,8 @@ def bayesian_cv(
                 param_names_without_p = params_cv_names[1:]
                 theta_space = theta_space_wrapper(param[0])
                 if precompute_mle:
-                    mle_theta = mle_wrapper(X, y, theta_space)
+                    mle_theta = mle_wrapper(
+                        X_train_cv, y_train_cv, theta_space)
 
             named_params = {
                 k: v
@@ -999,6 +1003,10 @@ def main():
             # Get best variable selection model (i.e. the best point estimate)
             best_estimator_var_sel, best_pe_var_sel = \
                 find_best_estimator_cv(mean_score_var_sel_cv, est_cv)
+
+            # Forget previous data-dependent MLE
+            best_estimator_bayesian.set_params(mle_precomputed=None)
+            best_estimator_var_sel.set_params(mle_precomputed=None)
 
             # Keep track of how often each strategy was the best
             bayesian_strategy_count[best_strategy_bayesian] += 1
