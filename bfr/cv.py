@@ -1070,7 +1070,7 @@ def main():
             max(bayesian_strategy_count, key=bayesian_strategy_count.get)
         ),
         (
-            args.method + "+sk_ridge",
+            args.method + "+ridge",
             np.mean(score_var_sel_best[:rep + 1]),
             np.std(score_var_sel_best[:rep + 1]),
             max(var_sel_strategy_count, key=var_sel_strategy_count.get)
