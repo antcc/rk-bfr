@@ -349,8 +349,10 @@ def multiple_linear_regression_cv(
         reg_lst = []
         alphas = np.logspace(-4, 4, 20)
         params_regularizer = {"reg__alpha": alphas}
+        """
         params_svm = {"reg__C": alphas,
                       "reg__gamma": ['auto', 'scale']}
+        """
 
         # MCMC+Lasso
         reg_lst.append((
@@ -366,12 +368,14 @@ def multiple_linear_regression_cv(
             params_regularizer
         ))
 
+        """
         # MCMC+SVM RBF
         reg_lst.append((
             f"{prefix}_{pe}+sk_svm_rbf",
             Pipeline([("reg", SVR(kernel='rbf'))]),
             params_svm
         ))
+        """
 
     else:
         reg_lst = regressors
@@ -412,7 +416,7 @@ def multiple_logistic_regression_cv(
         clf_lst = []
         Cs = np.logspace(-4, 4, 20)
         params_clf = {"clf__C": Cs}
-        params_svm = {"clf__gamma": ['auto', 'scale']}
+        # params_svm = {"clf__gamma": ['auto', 'scale']}
 
         # Emcee+LR
         clf_lst.append((
@@ -430,6 +434,7 @@ def multiple_logistic_regression_cv(
             params_clf
         ))
 
+        """
         # Emcee+SVM RBF
         clf_lst.append((
             f"{prefix}_{pe}+sk_svm_rbf",
@@ -437,6 +442,7 @@ def multiple_logistic_regression_cv(
                 ("clf", SVC(kernel='rbf'))]),
             {**params_svm, **params_clf}
         ))
+        """
 
     else:
         clf_lst = classifiers
@@ -653,6 +659,7 @@ def linear_regression_comparison_suite(
                        ))
     """
 
+    """
     # Manual+SVM RBF
     regressors.append(("manual_sel+sk_svm_rbf",
                        Pipeline([
@@ -669,6 +676,7 @@ def linear_regression_comparison_suite(
                            ("reg", SVR(kernel='rbf'))]),
                        {**params_dim_red, **params_svm}
                        ))
+    """
 
     """
     TARDA DEMASIADO (búsqueda en CV demasiado grande?)
@@ -683,6 +691,7 @@ def linear_regression_comparison_suite(
                        ))
     """
 
+    """
     # PCA+SVM RBF
     regressors.append(("pca+sk_svm_rbf",
                        Pipeline([
@@ -709,6 +718,7 @@ def linear_regression_comparison_suite(
                        params_svm
                        ))
 
+    """
     """
     TARDA DEMASIADO (búsqueda en CV demasiado grande?)
 
@@ -1067,6 +1077,7 @@ def logistic_regression_comparison_suite(
                         ))
     """
 
+    """
     # Manual+SVM RBF
     classifiers.append(("manual_sel+sk_svm_rbf",
                        Pipeline([
@@ -1092,6 +1103,7 @@ def logistic_regression_comparison_suite(
                            ("clf", SVC(kernel='rbf'))]),
                        {**params_dim_red, **params_clf, **params_svm}
                         ))
+    """
 
     """
     TARDA DEMASIADO (búsqueda en CV demasiado grande?)
@@ -1109,6 +1121,7 @@ def logistic_regression_comparison_suite(
                         ))
     """
 
+    """
     # PLS+SVM RBF
     classifiers.append(("pls+sk_svm_rbf",
                        Pipeline([
@@ -1134,6 +1147,7 @@ def logistic_regression_comparison_suite(
                        {**params_clf, **params_svm}
                         ))
 
+    """
     """
     TARDA DEMASIADO (búsqueda en CV demasiado grande?)
 

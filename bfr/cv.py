@@ -48,7 +48,7 @@ pd.set_option("display.precision", 3)
 pd.set_option('display.max_columns', 80)
 
 # Script behavior
-RUN_REF_ALGS = False
+RUN_REF_ALGS = True
 VERBOSE = True
 PRECOMPUTE_MLE = True
 PRINT_TO_FILE = False
@@ -632,6 +632,7 @@ def bayesian_cv(
     # For each combination of [p, eta], save the corresponding estimator
     est_cv = np.empty(params_cv_shape, dtype=object)
 
+
     if include_p:
         theta_space = theta_space_wrapper(p_max)
         if precompute_mle:
@@ -642,9 +643,12 @@ def bayesian_cv(
         X_train_cv, X_test_cv = X[train_cv], X[test_cv]
         y_train_cv, y_test_cv = y[train_cv], y[test_cv]
 
-        if include_p and precompute_mle:
-            mle_theta = mle_wrapper(
-                X_train_cv, y_train_cv, ts_fixed)
+        if precompute_mle:
+            # Save precomputed mles
+            mle_dict = {}
+            if include_p:
+                mle_theta = mle_wrapper(
+                    X_train_cv, y_train_cv, ts_fixed)
 
         # Iterate over all possible pairs of hyperparameters
         for idx, param in enumerated_product(*params_cv):
@@ -652,12 +656,15 @@ def bayesian_cv(
                 param_without_p = param
                 param_names_without_p = params_cv_names
             else:
+                p = param[0]
                 param_without_p = param[1:]
                 param_names_without_p = params_cv_names[1:]
-                theta_space = theta_space_wrapper(param[0])
+                theta_space = theta_space_wrapper(p)
                 if precompute_mle:
-                    mle_theta = mle_wrapper(
-                        X_train_cv, y_train_cv, theta_space)
+                    if p not in mle_dict:
+                        mle_dict[p] = mle_wrapper(
+                            X_train_cv, y_train_cv, theta_space)
+                    mle_theta = mle_dict[p]
 
             named_params = {
                 k: v
@@ -986,7 +993,7 @@ def main():
                 verbose=VERBOSE
             )
 
-            # Compute mean mse across folds
+            # Compute mean score across folds
             mean_score_bayesian_cv = {
                 k: v.mean(axis=0) for k, v in score_bayesian_cv.items()}
             mean_score_var_sel_cv = {
@@ -1005,8 +1012,12 @@ def main():
                 find_best_estimator_cv(mean_score_var_sel_cv, est_cv)
 
             # Forget previous data-dependent MLE
-            best_estimator_bayesian.set_params(mle_precomputed=None)
-            best_estimator_var_sel.set_params(mle_precomputed=None)
+            new_params_mle = {
+                "mle_precomputed": None,
+                "n_reps_mle": 2*args.n_reps_mle
+            }
+            best_estimator_bayesian.set_params(**new_params_mle)
+            best_estimator_var_sel.set_params(**new_params_mle)
 
             # Keep track of how often each strategy was the best
             bayesian_strategy_count[best_strategy_bayesian] += 1
@@ -1027,7 +1038,7 @@ def main():
                 best_pe_var_sel, best_estimator_var_sel,
                 est_multiple)
 
-            # Save mse of best models
+            # Save score of best models
             if args.kind == "linear":
                 score_bayesian = mean_squared_error(y_test, y_pred_bayesian)
                 score_var_sel = mean_squared_error(y_test, y_pred_var_sel)
@@ -1199,8 +1210,8 @@ def main():
             # Save the mean CV results and strategy statistics to disk
             np.savez(
                 SAVE_PATH + filename + ".npz",
-                mse_bayesian_all=score_bayesian_all,
-                mse_var_sel_all=score_var_sel_all,
+                score_bayesian_all=score_bayesian_all,
+                score_var_sel_all=score_var_sel_all,
                 bayesian_strategy_count=dict(bayesian_strategy_count),
                 var_sel_strategy_count=dict(var_sel_strategy_count)
             )
