@@ -1,0 +1,75 @@
+
+*** Bayesian-RKHS Functional Logistic Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+N_reps MLE: 8
+
+-- MODEL GENERATION --
+Total samples: 93
+Grid size: 31
+Train size: 62
+Smoothing: None
+Data name: growth
+Noise: 10%
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): [3, 4, 5]
+Values of η: [0.001, 0.01, 0.1, 1]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 900 + 100
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE ALGORITHMS --
+Mean split execution time: 73.346±5.964 s
+Total splits execution time: 12.224 min
+
+             Estimator  Mean Acc      SD
+      fpca+sk_logistic     0.965   0.030
+manual_sel+sk_logistic     0.961   0.032
+        pls+sk_svm_rbf     0.958   0.035
+       pca+sk_logistic     0.958   0.029
+       pls+sk_logistic     0.952   0.036
+        pls+sk_svm_lin     0.948   0.033
+       rmh+sk_logistic     0.948   0.044
+      sk_lda_pca+ridge     0.948   0.036
+       fpca+sk_svm_lin     0.945   0.043
+       fpca+sk_svm_rbf     0.945   0.041
+           sk_lda_pls1     0.945   0.032
+        rmh+sk_svm_rbf     0.945   0.043
+      sk_lda_pls+ridge     0.945   0.032
+        pca+sk_svm_rbf     0.945   0.041
+   sk_lda_manual+ridge     0.945   0.032
+     sk_lda_fpca+ridge     0.942   0.038
+      rkvs+sk_logistic     0.942   0.045
+ manual_sel+sk_svm_rbf     0.942   0.038
+          sk_lda_lasso     0.942   0.038
+               sk_fknn     0.942   0.040
+   sk_flda_fpls1_basis     0.942   0.038
+        pca+sk_svm_lin     0.939   0.039
+          sk_flda_apls     0.939   0.030
+        rmh+sk_svm_lin     0.935   0.043
+ manual_sel+sk_svm_lin     0.935   0.041
+       rkvs+sk_svm_rbf     0.929   0.054
+      sk_lda_rmh+ridge     0.929   0.043
+       rkvs+sk_svm_lin     0.926   0.054
+      sk_flda_l2_basis     0.923   0.041
+                sk_fnc     0.735   0.112
+                sk_mdc     0.700   0.087
+
+-- RESULTS EMCEE --
+Mean split execution time: 4434.288±817.706 s
+Total splits execution time: 739.048 min
+
+     Estimator  Mean Acc      SD  Main strategy
+emcee+sk_ridge     0.942   0.038         median
+         emcee     0.887   0.062 posterior_mean

@@ -1,0 +1,75 @@
+
+*** Bayesian-RKHS Functional Logistic Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+N_reps MLE: 8
+
+-- MODEL GENERATION --
+Total samples: 534
+Grid size: 30
+Train size: 357
+Smoothing: None
+Data name: medflies
+Noise: 10%
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): {1: 0.01, 2: 0.14, 3: 0.35, 4: 0.35, 5: 0.15}
+Values of η: [0.001, 0.01, 0.1, 1]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 900 + 100
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE ALGORITHMS --
+Mean split execution time: 293.448±3.773 s
+Total splits execution time: 48.908 min
+
+             Estimator  Mean Acc      SD
+        rmh+sk_svm_rbf     0.620   0.032
+       rmh+sk_logistic     0.604   0.028
+      rkvs+sk_logistic     0.600   0.022
+       rkvs+sk_svm_rbf     0.599   0.031
+manual_sel+sk_logistic     0.587   0.027
+      sk_lda_rmh+ridge     0.582   0.022
+       rkvs+sk_svm_lin     0.580   0.042
+        pls+sk_svm_rbf     0.576   0.030
+ manual_sel+sk_svm_lin     0.575   0.043
+       pls+sk_logistic     0.575   0.025
+   sk_lda_manual+ridge     0.574   0.031
+ manual_sel+sk_svm_rbf     0.574   0.035
+          sk_lda_lasso     0.570   0.027
+      sk_flda_l2_basis     0.568   0.030
+           sk_lda_pls1     0.566   0.022
+       fpca+sk_svm_rbf     0.566   0.025
+      sk_lda_pls+ridge     0.563   0.028
+   sk_flda_fpls1_basis     0.559   0.029
+        pca+sk_svm_rbf     0.559   0.026
+          sk_flda_apls     0.559   0.029
+        pls+sk_svm_lin     0.558   0.026
+       pca+sk_logistic     0.549   0.031
+                sk_fnc     0.547   0.038
+      sk_lda_pca+ridge     0.542   0.036
+      fpca+sk_logistic     0.541   0.035
+               sk_fknn     0.536   0.034
+        pca+sk_svm_lin     0.533   0.044
+        rmh+sk_svm_lin     0.533   0.083
+                sk_mdc     0.525   0.027
+       fpca+sk_svm_lin     0.524   0.030
+     sk_lda_fpca+ridge     0.523   0.028
+
+-- RESULTS EMCEE --
+Mean split execution time: 807.791±14.281 s
+Total splits execution time: 134.632 min
+
+     Estimator  Mean Acc      SD  Main strategy
+         emcee     0.554   0.023 posterior_mean
+emcee+sk_ridge     0.551   0.047           mode
