@@ -1,0 +1,70 @@
+
+*** Bayesian-RKHS Functional Logistic Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+N_reps MLE: 4
+
+-- MODEL GENERATION --
+Total samples: 200
+Grid size: 100
+Train size: 140
+Smoothing: Nadaraya-Watson
+Model type: RKHS
+X ~ GP(0, fractional_brownian_kernel)
+Noise: 10%
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): {1: 0.05, 2: 0.15, 3: 0.6, 4: 0.2}
+Values of η: [0.001, 0.01, 0.1, 1]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 900 + 100
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE ALGORITHMS --
+Mean split execution time: 64.074±5.490 s
+Total splits execution time: 10.679 min
+
+          Estimator  Mean Acc      SD
+     lda_fpca+ridge     0.795   0.041
+      lda_pls+ridge     0.793   0.048
+      lda_rmh+ridge     0.793   0.044
+        pca+svm_lin     0.788   0.045
+   lda_manual+ridge     0.788   0.046
+      lda_pca+ridge     0.787   0.045
+ manual_sel+svm_lin     0.787   0.041
+       pls+logistic     0.785   0.047
+      fpca+logistic     0.783   0.038
+       rmh+logistic     0.783   0.043
+      rkvs+logistic     0.782   0.035
+        pls+svm_lin     0.782   0.050
+   flda_fpls1_basis     0.782   0.043
+       fpca+svm_lin     0.782   0.046
+        rmh+svm_lin     0.778   0.042
+          flda_apls     0.778   0.039
+       pca+logistic     0.775   0.042
+manual_sel+logistic     0.773   0.048
+                fnc     0.772   0.049
+          lda_lasso     0.770   0.046
+           lda_pls1     0.768   0.058
+       rkvs+svm_lin     0.758   0.047
+               fknn     0.757   0.033
+      flda_l2_basis     0.743   0.060
+                mdc     0.722   0.047
+
+-- RESULTS EMCEE --
+Mean split execution time: 735.427±63.119 s
+Total splits execution time: 122.571 min
+
+  Estimator  Mean Acc      SD  Main strategy
+      emcee     0.767   0.054 posterior_mean
+emcee+ridge     0.735   0.049           mode
