@@ -971,7 +971,7 @@ def main():
 
             if VERBOSE:
                 print(f"(It. {rep + 1}/{args.n_reps}) Running {total_models} "
-                      "bayesian RKHS models...")
+                      f"bayesian RKHS {args.kind} models...")
 
             score_bayesian_cv, score_var_sel_cv, est_cv = bayesian_cv(
                 X_train,
