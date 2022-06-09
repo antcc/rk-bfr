@@ -497,9 +497,10 @@ def run_bayesian_model(
         else:
             print(fit_summary)
 
-        print("\nComputing metrics...\n")
-
     if compute_metrics:
+
+        if verbose:
+            print("\nComputing metrics...\n")
 
         # -- Compute metrics using several point estimates
 

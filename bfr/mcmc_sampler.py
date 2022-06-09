@@ -627,15 +627,17 @@ class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
             self._discard_components(trace)
 
     def _compute_burn(self):
-        autocorr = self.autocorrelation_times(burn=0, thin=1)
-        max_autocorr = np.nanmax(autocorr)
-
-        if np.isfinite(max_autocorr):
-            burn = int(self.burn_relative*max_autocorr)
+        if self.burn is None:
+            autocorr = self.autocorrelation_times(burn=0, thin=1)
+            max_autocorr = np.nanmax(autocorr)
+            if np.isfinite(max_autocorr):
+                burn = int(self.burn_relative*max_autocorr)
+            else:
+                burn = self.n_iter//10
         else:
             burn = self.burn
 
-        return np.minimum(burn, self.n_iter//10)
+        return burn
 
     def _emcee_to_idata(self):
         ts = self.theta_space
@@ -838,7 +840,7 @@ class BayesianRKHSFRegressionPymc(BayesianRKHSFRegression):
         step_kwargs: Dict = {},
         thin: int = 1,
         thin_pp: int = 5,
-        burn: int = 100,
+        burn: Optional[int] = None,
         mle_precomputed: Optional[np.ndarray] = None,
         mle_method: str = 'L-BFGS-B',
         mle_strategy: str = 'global',

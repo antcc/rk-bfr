@@ -399,7 +399,7 @@ def generate_pp(
         print("Generating posterior predictive samples...")
 
     theta = idata.posterior[theta_space.names].to_stacked_array(
-        "", sample_dims=("chain", "draw"))
+        "", sample_dims=("chain", "draw"))[:, ::thin, :]
 
     # Generate responses following the model
     if kind == 'logistic':

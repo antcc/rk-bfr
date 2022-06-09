@@ -145,6 +145,10 @@ def get_arg_parser():
         help="number of tune/warmup iterations in MCMC algorithm"
     )
     parser.add_argument(
+        "--n-burn", type=int, default=200,
+        help="number of initial samples to discard in MCMC algorithm"
+    )
+    parser.add_argument(
         "--n-reps-mle", type=int, default=4,
         help="number of random repetitions of MLE computation"
     )
@@ -547,6 +551,7 @@ def get_bayesian_model_wrapper(
         "n_reps_mle": args.n_reps_mle,
         "n_jobs": args.n_cores,
         "verbose": args.verbose,
+        "burn": args.n_burn,
         "random_state": rng
     }
 
@@ -631,7 +636,6 @@ def bayesian_cv(
 
     # For each combination of [p, eta], save the corresponding estimator
     est_cv = np.empty(params_cv_shape, dtype=object)
-
 
     if include_p:
         theta_space = theta_space_wrapper(p_max)
