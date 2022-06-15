@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Optional, Tuple, Union
+
 import numpy as np
-from typing import Union, Optional, Tuple
-
-from sklearn.utils.validation import check_is_fitted
-from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
-
-from skfda.ml.regression import LinearRegression as LinearRegressionL2
 from skfda._utils._utils import _classifier_get_classes
+from skfda.ml.regression import LinearRegression as LinearRegressionL2
 from skfda.representation import FData
+from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
+from sklearn.utils.validation import check_is_fitted
 
 AcceptedDataType = Union[
     FData,

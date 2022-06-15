@@ -2,11 +2,12 @@
 
 from typing import Any, Callable, Dict, Optional, Union
 
+import aesara.tensor as at
 import numpy as np
-import pymc3 as pm
-import theano.tensor as tt
+import pymc as pm
 from scipy.special import expit
-from utils import compute_mode_xarray, apply_threshold
+
+from .utils import apply_threshold, compute_mode_xarray
 
 
 class Identity():
@@ -776,7 +777,7 @@ def make_model_linear_pymc(
         G_tau = pm.math.matrix_dot(X_tau.T, X_tau)
         G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
         G_tau_reg = G_tau + eta * \
-            tt.max(tt.nlinalg.eigh(G_tau)[0])*tt.eye(p)
+            at.max(at.nlinalg.eigh(G_tau)[0])*at.eye(p)
         G_log_det = pm.math.logdet(G_tau_reg)
 
         def beta_lprior(value):
@@ -843,7 +844,7 @@ def make_model_logistic_pymc(
         G_tau = pm.math.matrix_dot(X_tau.T, X_tau)
         G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
         G_tau_reg = G_tau + eta * \
-            tt.max(tt.nlinalg.eigh(G_tau)[0])*tt.eye(p)
+            at.max(at.nlinalg.eigh(G_tau)[0])*at.eye(p)
         G_log_det = pm.math.logdet(G_tau_reg)
 
         def beta_lprior(value):

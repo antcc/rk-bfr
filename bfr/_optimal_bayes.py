@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Tuple, Union
+
 import numpy as np
-from typing import Union, Tuple
-
-import utils
-
-from sklearn.utils.validation import check_is_fitted
-from sklearn.base import BaseEstimator, ClassifierMixin
-
 from skfda._utils._utils import _classifier_get_classes
-from skfda.representation.grid import FDataGrid
-from skfda.representation.basis import FDataBasis
 from skfda.representation import FData
+from skfda.representation.basis import FDataBasis
+from skfda.representation.grid import FDataGrid
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.utils.validation import check_is_fitted
 
 AcceptedDataType = Union[
     FData,
@@ -68,8 +65,8 @@ class NaiveGPClassifier(BaseEstimator, ClassifierMixin):
         self.K1_ = X1.cov().data_matrix[0, ..., 0]
 
         # Compute logdets using SVD decomposition
-        self.logdet0_ = utils.logdet(self.K0_)
-        self.logdet1_ = utils.logdet(self.K1_)
+        self.logdet0_ = np.linalg.slogdet(self.K0_)[1]
+        self.logdet1_ = np.linalg.slogdet(self.K1_)[1]
 
         # Compute the inverse covariance matrices
         N = len(self.grid_)

@@ -2,8 +2,9 @@ from multiprocessing import Pool
 
 import numpy as np
 import scipy
-from bayesian_model import neg_ll_linear, neg_ll_logistic
-from utils import fdata_to_numpy
+
+from .bayesian_model import neg_ll_linear, neg_ll_logistic
+from .utils import fdata_to_numpy
 
 
 def optimizer_global(

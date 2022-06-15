@@ -1,16 +1,11 @@
-name: bfr-39
+name: bfr-py39
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - python=3.9
-  - mkl
-  - theano-pymc
-  - pymc3
-  - mkl-service
+  - pymc>=4.0.0
   - emcee
   - scikit-learn
-  - fdasrsf
-  - scipy==1.7.3
+  - scipy
   - pip:
     - scikit-fda

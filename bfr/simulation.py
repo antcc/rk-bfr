@@ -3,7 +3,7 @@
 import numpy as np
 from scipy.integrate import trapz
 
-from bayesian_model import generate_response_linear, ThetaSpace
+from .bayesian_model import ThetaSpace, generate_response_linear
 
 
 def brownian_kernel(s, t, sigma=1.0):

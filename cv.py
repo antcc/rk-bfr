@@ -10,14 +10,17 @@ from itertools import product
 import emcee
 import numpy as np
 import pandas as pd
-import preprocessing
-import pymc3 as pm
-import simulation
-from _fpls import APLS, FPLS, FPLSBasis
-from bayesian_model import ThetaSpace, probability_to_label
-from mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
-                          BFLogisticPymc)
-from mle import compute_mle
+import pymc as pm
+from bfr import preprocessing, simulation
+from bfr._fpls import APLS, FPLS, FPLSBasis
+from bfr.bayesian_model import ThetaSpace, probability_to_label
+from bfr.mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
+                              BFLogisticPymc)
+from bfr.mle import compute_mle
+from bfr.sklearn_utils import DataMatrix, PLSRegressionWrapper
+from bfr.utils import (bayesian_variable_selection_predict, cv_sk,
+                       linear_regression_comparison_suite,
+                       logistic_regression_comparison_suite)
 from skfda.datasets import (fetch_cran, fetch_growth, fetch_medflies,
                             fetch_tecator)
 from skfda.exploratory.depth import IntegratedDepth, ModifiedBandDepth
@@ -29,10 +32,7 @@ from sklearn.linear_model import Lasso, LogisticRegressionCV, Ridge, RidgeCV
 from sklearn.metrics import accuracy_score, mean_squared_error
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn_utils import DataMatrix, PLSRegressionWrapper
-from utils import (bayesian_variable_selection_predict, cv_sk,
-                   linear_regression_comparison_suite,
-                   logistic_regression_comparison_suite)
+
 
 ###################################################################
 # CONFIGURATION
@@ -893,7 +893,7 @@ def main():
         est_multiple = Pipeline([
             ("data", DataMatrix()),
             ("reg", RidgeCV(
-                alphas=np.logspace(-3, 3, 10),
+                alphas=np.logspace(-4, 4, 10),
                 scoring="neg_mean_squared_error",
                 cv=cv_est_multiple))]
         )
@@ -902,7 +902,7 @@ def main():
         est_multiple = Pipeline([
             ("data", DataMatrix()),
             ("clf", LogisticRegressionCV(
-                Cs=np.logspace(-3, 3, 10),
+                Cs=np.logspace(-4, 4, 10),
                 scoring="accuracy",
                 cv=cv_est_multiple))]
         )

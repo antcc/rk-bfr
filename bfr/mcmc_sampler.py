@@ -11,14 +11,8 @@ from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 import arviz as az
 import emcee
 import numpy as np
-import pymc3 as pm
-from bayesian_model import (PriorType, RandomType, ThetaSpace, generate_pp,
-                            log_posterior_linear, log_posterior_logistic,
-                            log_prior_linear_logistic, make_model_linear_pymc,
-                            make_model_logistic_pymc, point_estimate,
-                            point_predict)
-from mle import compute_mle
-from pymc3.step_methods.arraystep import BlockedStep
+import pymc as pm
+from pymc.step_methods.arraystep import BlockedStep
 from skfda.representation import FData
 from skfda.representation.basis import FDataBasis
 from skfda.representation.grid import FDataGrid
@@ -26,8 +20,15 @@ from sklearn.base import (BaseEstimator, ClassifierMixin, RegressorMixin,
                           TransformerMixin)
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.utils.validation import check_is_fitted
-from utils import (HandleLogger, apply_threshold, check_random_state,
-                   fdata_to_numpy, mode_fn)
+
+from .bayesian_model import (PriorType, RandomType, ThetaSpace, generate_pp,
+                             log_posterior_linear, log_posterior_logistic,
+                             log_prior_linear_logistic, make_model_linear_pymc,
+                             make_model_logistic_pymc, point_estimate,
+                             point_predict)
+from .mle import compute_mle
+from .utils import (HandleLogger, apply_threshold, check_random_state,
+                    fdata_to_numpy, mode_fn)
 
 DataType = Union[
     FData,

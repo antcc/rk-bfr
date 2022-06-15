@@ -5,12 +5,13 @@ import numbers
 import os
 import warnings
 
+import arviz as az
 import numpy as np
 import pandas as pd
 import xarray as xr
-from _fpls import APLS, FPLS
-from _lda import LDA
-from arviz import concat, convert_to_inference_data, kde, make_ufunc
+
+from ._fpls import APLS, FPLS
+from ._lda import LDA
 
 try:
     from IPython.display import display
@@ -33,10 +34,9 @@ from sklearn.linear_model import Lasso, LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score, mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
-from sklearn.svm import SVC, SVR, LinearSVC
-from sklearn_utils import (Basis, DataMatrix, FeatureSelector,
-                           PLSRegressionWrapper)
 
+from .sklearn_utils import (Basis, DataMatrix, FeatureSelector,
+                            PLSRegressionWrapper)
 
 # Custom context managers for handling warnings
 
@@ -130,7 +130,7 @@ def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
     for pp, var_name in zip(pps, var_names):
         data_vars[var_name] = (("chain", "draw", dim_name), pp)
 
-    idata_pp = convert_to_inference_data(
+    idata_pp = az.convert_to_inference_data(
         xr.Dataset(data_vars=data_vars, coords=coords),
         group="posterior_predictive",
     )
@@ -139,15 +139,15 @@ def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
         idata.extend(idata_pp)
     else:
         if y_obs is None:
-            idata_aux = convert_to_inference_data(
+            idata_aux = az.convert_to_inference_data(
                 idata.observed_data, group="observed_data")
         else:
-            idata_aux = convert_to_inference_data(
+            idata_aux = az.convert_to_inference_data(
                 xr.Dataset(data_vars={"y_obs": ("observation", y_obs)},
                            coords=coords),
                 group="observed_data")
 
-        concat(idata_pp, idata_aux, inplace=True)
+        az.concat(idata_pp, idata_aux, inplace=True)
 
         return idata_pp
 
@@ -158,7 +158,7 @@ def mode_fn(values, skipna=False, bw='experimental'):
         warnings.warn("Your data appears to have NaN values.")
 
     if values.dtype.kind == "f":
-        x, density = kde(values, bw=bw)
+        x, density = az.kde(values, bw=bw)
         return x[np.argmax(density)]
     else:
         return mode(values)[0][0]
@@ -174,7 +174,7 @@ def compute_mode_xarray(
         return mode_fn(x, skipna=skipna, bw=bw)
 
     return xr.apply_ufunc(
-        make_ufunc(mode_fn_args), data,
+        az.make_ufunc(mode_fn_args), data,
         input_core_dims=(dim,)
     )
 
@@ -354,12 +354,14 @@ def multiple_linear_regression_cv(
                       "reg__gamma": ['auto', 'scale']}
         """
 
+        """
         # MCMC+Lasso
         reg_lst.append((
             f"{prefix}_{pe}+lasso",
             Pipeline([("reg", Lasso())]),
             params_regularizer
         ))
+        """
 
         # MCMC+Ridge
         reg_lst.append((
@@ -426,6 +428,7 @@ def multiple_logistic_regression_cv(
             params_clf
         ))
 
+        """
         # Emcee+SVM Linear
         clf_lst.append((
             f"{prefix}_{pe}+svm_lin",
@@ -433,6 +436,7 @@ def multiple_logistic_regression_cv(
                 ("clf", LinearSVC(random_state=random_state))]),
             params_clf
         ))
+        """
 
         """
         # Emcee+SVM RBF
@@ -1003,6 +1007,7 @@ def logistic_regression_comparison_suite(
                         ))
     """
 
+    """
     # Manual+SVM Linear
     classifiers.append(("manual_sel+svm_lin",
                        Pipeline([
@@ -1029,6 +1034,8 @@ def logistic_regression_comparison_suite(
                        {**params_dim_red, **params_clf}
                         ))
     """
+
+    """
     TARDA DEMASIADO (búsqueda en CV demasiado grande?)
 
     # FPLS (fixed basis)+SVM Linear
@@ -1041,6 +1048,7 @@ def logistic_regression_comparison_suite(
                         ))
     """
 
+    """
     # PLS+SVM Linear
     classifiers.append(("pls+svm_lin",
                        Pipeline([
@@ -1065,6 +1073,7 @@ def logistic_regression_comparison_suite(
                            ("clf", LinearSVC(random_state=random_state))]),
                        params_clf
                         ))
+    """
 
     """
     TARDA DEMASIADO (búsqueda en CV demasiado grande?)

@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
-
-from sklearn.base import BaseEstimator, TransformerMixin
-
 from skfda.preprocessing.dim_reduction.feature_extraction import FPCA
-from skfda.representation.basis import Basis
 from skfda.representation import FData
+from skfda.representation.basis import Basis, FDataBasis
 from skfda.representation.grid import FDataGrid
-from skfda.representation.basis import FDataBasis
+from sklearn.base import BaseEstimator, TransformerMixin
 
 
 class KarhunenLoeve(Basis):

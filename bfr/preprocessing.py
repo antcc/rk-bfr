@@ -2,7 +2,8 @@ import numpy as np
 from skfda.preprocessing.smoothing.validation import (
     LinearSmootherGeneralizedCVScorer, SmoothingParameterSearch,
     akaike_information_criterion)
-from utils import IgnoreWarnings
+
+from .utils import IgnoreWarnings
 
 
 def normalize_grid(grid, low=0, high=1):
