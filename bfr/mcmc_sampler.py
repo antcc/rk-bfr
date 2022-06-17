@@ -146,16 +146,25 @@ class _BayesianRKHSFRegression(
 
     def transform(self, X: DataType, pe='mode', bw='experimental') -> DataType:
         check_is_fitted(self)
-        grid = self.theta_space.grid
+        ts = self.theta_space
 
-        tau_hat = point_estimate(
-            self.idata_,
-            pe,
-            self.theta_space.names,
-            skipna=self.theta_space.include_p,
-            bw=bw
-        )[self.theta_space.tau_idx]
-        idx_hat = np.abs(grid - tau_hat[:, np.newaxis]).argmin(1)
+        if callable(pe) or pe in self.default_point_estimates:
+            theta_hat = point_estimate(
+                self.idata_,
+                pe,
+                ts.names,
+                skipna=ts.include_p,
+                bw=bw
+            )
+            n_comp = theta_hat[ts.p_idx]
+            tau_hat = theta_hat[ts.tau_idx][:ts.round_p(n_comp)]
+
+            if not callable(pe) and ts.include_p:
+                self._n_components_default_pe[pe] = n_comp
+        else:
+            raise ValueError("Incorrect value for parameter 'pe'.")
+
+        idx_hat = np.abs(ts.grid - tau_hat[:, np.newaxis]).argmin(1)
         idx_hat.sort()
 
         X_red = self._variable_selection(X, idx_hat)

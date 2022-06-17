@@ -115,6 +115,21 @@ def plot_posterior(idata, theta_space, gridsize, textsize, pe='mode'):
     )
 
 
+def plot_forest(idata, theta_space, textsize, var_names):
+    n_plots = len(var_names)
+    fig, axs = plt.subplots(1, n_plots, figsize=(3*n_plots, 3))
+
+    for ax, var_name in zip(axs, var_names):
+        az.plot_forest(
+            idata.posterior.dropna(theta_space.dim_name, how="all"),
+            combined=True,
+            var_names=var_name,
+            labeller=theta_space.labeller,
+            textsize=textsize,
+            ax=ax
+        )
+
+
 def plot_histogram(samples, nrows, ncols, labels, figsize=(10, 10)):
     """Plot histogram of 'samples', which is an ndarray of (nchains, n_dim)."""
     n_dim = samples.shape[-1]
