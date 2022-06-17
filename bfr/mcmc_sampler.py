@@ -44,7 +44,7 @@ ModelType = Callable[
 ]
 
 
-class BayesianRKHSFRegression(
+class _BayesianRKHSFRegression(
     ABC,
     BaseEstimator,
     TransformerMixin
@@ -300,6 +300,11 @@ class BayesianRKHSFRegression(
                     "Expected a dictionary for the prior probabilities "
                     "of the parameter 'p'."
                 )
+            if (len(self.prior_p) != ts.p_max):
+                raise ValueError(
+                    "Must provide a prior probability for each "
+                    "possible value of p."
+                )
             if sum(self.prior_p.values()) != 1.0:
                 raise ValueError(
                     "The prior probabilities of 'p' must add up to one."
@@ -395,7 +400,7 @@ class BayesianRKHSFRegression(
         return X, y
 
 
-class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
+class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
     """Bayesian functional regression.
 
     It uses 'emcee' as the underlying MCMC algorithm for
@@ -441,7 +446,7 @@ class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
         progress_notebook: bool = False,
         progress_kwargs: Optional[Dict] = None,
         random_state: Optional[RandomType] = None
-    ) -> BayesianRKHSFRegressionEmcee:
+    ) -> _BayesianRKHSFRegressionEmcee:
         self.theta_space = theta_space
         self.n_walkers = n_walkers
         self.n_iter = n_iter
@@ -476,7 +481,7 @@ class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
         self,
         X: DataType,
         y: np.ndarray
-    ) -> BayesianRKHSFRegressionEmcee:
+    ) -> _BayesianRKHSFRegressionEmcee:
         X, y = self._argcheck_X_y(X, y)
         self.n_features_in_ = X.shape[1]
         super().fit(X, y)
@@ -800,7 +805,7 @@ class BayesianRKHSFRegressionEmcee(BayesianRKHSFRegression):
 
 
 class BFLinearEmcee(
-    BayesianRKHSFRegressionEmcee,
+    _BayesianRKHSFRegressionEmcee,
     RegressorMixin
 ):
     kind = 'linear'
@@ -808,14 +813,14 @@ class BFLinearEmcee(
 
 
 class BFLogisticEmcee(
-    BayesianRKHSFRegressionEmcee,
+    _BayesianRKHSFRegressionEmcee,
     ClassifierMixin
 ):
     kind = 'logistic'
     default_strategies = ['posterior_mean', 'posterior_vote']
 
 
-class BayesianRKHSFRegressionPymc(BayesianRKHSFRegression):
+class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
     """Bayesian functional linear regression.
 
     It uses 'pymc' as the underlying MCMC algorithm for
@@ -850,7 +855,7 @@ class BayesianRKHSFRegressionPymc(BayesianRKHSFRegression):
         n_jobs: int = 1,
         verbose: int = 0,
         random_state: Optional[RandomType] = None
-    ) -> BayesianRKHSFRegressionPymc:
+    ) -> _BayesianRKHSFRegressionPymc:
         self.theta_space = theta_space
         self.n_walkers = n_walkers
         self.n_iter = n_iter
@@ -879,7 +884,7 @@ class BayesianRKHSFRegressionPymc(BayesianRKHSFRegression):
         self,
         X: DataType,
         y: np.ndarray
-    ) -> BayesianRKHSFRegressionPymc:
+    ) -> _BayesianRKHSFRegressionPymc:
         X, y = self._argcheck_X_y(X, y)
         self.n_features_in_ = X.shape[1]
         super().fit(X, y)
@@ -1000,7 +1005,7 @@ class BayesianRKHSFRegressionPymc(BayesianRKHSFRegression):
 
 
 class BFLinearPymc(
-    BayesianRKHSFRegressionPymc,
+    _BayesianRKHSFRegressionPymc,
     RegressorMixin
 ):
     kind = 'linear'
@@ -1008,7 +1013,7 @@ class BFLinearPymc(
 
 
 class BFLogisticPymc(
-    BayesianRKHSFRegressionPymc,
+    _BayesianRKHSFRegressionPymc,
     ClassifierMixin
 ):
     kind = 'logistic'

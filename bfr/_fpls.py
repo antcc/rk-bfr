@@ -103,6 +103,7 @@ class FPLSBasis(Basis):
 class APLS(
     BaseEstimator,     # type: ignore
     RegressorMixin,    # type: ignore
+    TransformerMixin   # type: ignore
 ):
     """Implements the APLS algorithm proposed by Delaigle and Hall [1].
 
@@ -119,40 +120,49 @@ class APLS(
         y: np.ndarray,
         eval_points: Optional[np.ndarray] = None
     ) -> APLS:
-        # Center data
+        X = self._argcheck_X(X, eval_points)
+
+        # Get mean information of data
         self.X_mean_ = X.mean(axis=0)
         self.y_mean_ = y.mean()
-        X = X - self.X_mean_
+
+        # Get centered data
+        data, self.grid_ = self._extract_centered_data(X)
         y = y - self.y_mean_
 
         # Estimate K(s, t)
         K = X.cov().data_matrix[0, ..., 0]
 
-        # Convert X to FDataGrid representation
-        if isinstance(X, FDataBasis):
-            X = X.to_grid(eval_points)
-
-        # Retain only the data matrix
-        data = X.data_matrix[..., 0]
-        grid = X.grid_points[0]
-
         # Estimate K^i(b) for i=1,...,p
         kb = self._fpls_span(data, y)
         Kb_iterations = [kb]
         for i in range(1, self.n_components):
-            Kb_next = _cov_operator(Kb_iterations[i - 1], K, grid)
+            Kb_next = _cov_operator(Kb_iterations[i - 1], K, self.grid_)
             Kb_iterations.append(Kb_next)
 
         # Orthonormalize {K^i(b)} to obtain an FPLS basis
-        self.basis_ = _modified_gram_schmidt(Kb_iterations, K, grid)
+        self.basis_ = _modified_gram_schmidt(Kb_iterations, K, self.grid_)
 
         # Compute the coordinates of each sample with respect to the FPLS basis
-        coord_matrix = simpson(data[:, None]*self.basis_[None, :], x=grid)
+        coord_matrix = self._compute_coord_matrix(data, self.grid_)
 
         # Obtain coefficients by solving a least squares problem
         self.coef_ = np.linalg.lstsq(coord_matrix, y, rcond=None)[0]
 
         return self
+
+    def transform(
+        self,
+        X: FData,
+        eval_points: Optional[np.ndarray] = None
+    ) -> np.ndarray:
+        check_is_fitted(self)
+        X = self._argcheck_X(X, eval_points)
+
+        data, grid = self._extract_centered_data(X)
+        coord_matrix = self._compute_coord_matrix(data, grid)
+
+        return coord_matrix
 
     def predict(
         self,
@@ -160,24 +170,39 @@ class APLS(
         eval_points: Optional[np.ndarray] = None
     ) -> np.ndarray:
         check_is_fitted(self)
+        X = self._argcheck_X(X, eval_points)
 
+        data, grid = self._extract_centered_data(X)
+        coord_matrix = self._compute_coord_matrix(data, grid)
+
+        return self.y_mean_ + coord_matrix@self.coef_
+
+    def _extract_centered_data(self, X, eval_points=None):
         # Center X and evaluate on a grid if needed
         X = X - self.X_mean_
-        if isinstance(X, FDataBasis):
-            X = X.to_grid(eval_points)
 
         # Retain only the data matrix
         data = X.data_matrix[..., 0]
         grid = X.grid_points[0]
 
-        coord_matrix = simpson(
-            data[:, None]*self.basis_[None, :], x=grid)
+        return data, grid
 
-        return self.y_mean_ + coord_matrix@self.coef_
+    def _compute_coord_matrix(self, data: np.ndarray, grid: np.ndarray):
+        return simpson(data[:, None]*self.basis_[None, :], x=grid)
 
     def _fpls_span(self, X, y):
         # X is assumed to be centered
         return X.T@(y - y.mean())/(X.shape[0] - 1)
+
+    def _argcheck_X(self, X, eval_points):
+        if isinstance(X, FDataBasis):
+            X = X.to_grid(eval_points)
+
+        if (hasattr(self, "grid_") and
+                not np.array_equal(X.grid_points[0], self.grid_)):
+            raise ValueError("Grid must coincide for training and test data.")
+
+        return X
 
 
 class FPLS(

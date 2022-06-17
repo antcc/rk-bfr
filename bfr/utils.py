@@ -10,17 +10,18 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from ._flda import FLDA
 from ._fpls import APLS, FPLS
-from ._lda import LDA
 
 try:
     from IPython.display import display
 except ImportError:
     pass
 from scipy.stats import mode
-from skfda.ml.classification import (KNeighborsClassifier,
-                                     MaximumDepthClassifier, NearestCentroid)
-from skfda.ml.regression import KNeighborsRegressor
+from skfda.ml.classification import KNeighborsClassifier
+from skfda.ml.classification import LogisticRegression as FLR
+from skfda.ml.classification import MaximumDepthClassifier
+from skfda.ml.classification import NearestCentroid as FNC
 from skfda.ml.regression import LinearRegression as FLinearRegression
 from skfda.preprocessing.dim_reduction.feature_extraction import FPCA
 from skfda.preprocessing.dim_reduction.variable_selection import \
@@ -30,13 +31,17 @@ from skfda.preprocessing.dim_reduction.variable_selection import \
 from skfda.representation.basis import FDataBasis
 from skfda.representation.grid import FDataGrid
 from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis as QDA
 from sklearn.linear_model import Lasso, LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score, mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV
+from sklearn.neighbors import NearestCentroid
 from sklearn.pipeline import Pipeline
 
 from .sklearn_utils import (Basis, DataMatrix, FeatureSelector,
                             PLSRegressionWrapper)
+
 
 # Custom context managers for handling warnings
 
@@ -283,23 +288,24 @@ def cv_sk(
         if name == "fknn":
             K = est_cv.best_params_[f"{est_name}__n_neighbors"]
             n_features = f"K={K}"
-        elif name == "mdc" or name == "fnc" or name == "optimal_bayes":
+        elif name == "mdc" or name == "fnc":
             n_features = X.data_matrix.shape[1]
         elif name == "flr":
             n_features = est_cv.best_estimator_[est_name].p
-        elif "svm" in name:
+        elif "qda" in name or "+nc" in name or name == "lda":
             n_features = est_cv.best_estimator_[est_name].n_features_in_
-        elif "pls1" in name:
+        elif "pls1" in name or name == "flda":
             if kind == 'linear':
                 n_features = est_cv.best_estimator_[est_name].n_components
             else:
                 n_features = \
                     est_cv.best_estimator_[est_name].base_regressor.n_components
         else:
-            if isinstance(est_cv.best_estimator_[est_name].coef_[0], FDataBasis):
+            if isinstance(
+                    est_cv.best_estimator_[est_name].coef_[0], FDataBasis):
                 coef = \
                     est_cv.best_estimator_[est_name].coef_[0].coefficients[0]
-            elif "logistic" in name:
+            elif "log" in name:
                 coef = est_cv.best_estimator_[est_name].coef_[0]
             else:
                 coef = est_cv.best_estimator_[est_name].coef_
@@ -563,10 +569,8 @@ def linear_regression_comparison_suite(
     params_regularizer,
     params_select,
     params_dim_red,
-    params_svm,
     params_basis,
     params_pls,
-    params_knn,
     random_state=None
 ):
     regressors = []
@@ -583,6 +587,14 @@ def linear_regression_comparison_suite(
                        params_regularizer
                        ))
 
+    # Ridge
+    regressors.append(("ridge",
+                       Pipeline([
+                           ("data_matrix", DataMatrix()),
+                           ("reg", Ridge())]),
+                       params_regularizer
+                       ))
+
     # PLS1 regression
     regressors.append(("pls1",
                        Pipeline([
@@ -596,7 +608,7 @@ def linear_regression_comparison_suite(
     """
 
     # Manual+Ridge
-    regressors.append(("manual_sel+ridge",
+    regressors.append(("manual+ridge",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
                            ("selector", FeatureSelector()),
@@ -653,90 +665,6 @@ def linear_regression_comparison_suite(
                        ))
 
     """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # mRMR+Ridge
-    regressors.append(("mRMR+ridge",
-                       Pipeline([
-                           ("var_sel", mRMR()),
-                           ("reg", Ridge())]),
-                       {**params_mrmr, **params_regularizer}
-                       ))
-    """
-
-    """
-    # Manual+SVM RBF
-    regressors.append(("manual_sel+svm_rbf",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("selector", FeatureSelector()),
-                           ("reg", SVR(kernel='rbf'))]),
-                       {**params_select, **params_svm}
-                       ))
-
-    # FPCA+SVM RBF
-    regressors.append(("fpca+svm_rbf",
-                       Pipeline([
-                           ("dim_red", FPCA()),  # Retains scores only
-                           ("reg", SVR(kernel='rbf'))]),
-                       {**params_dim_red, **params_svm}
-                       ))
-    """
-
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # FPLS (fixed basis)+SMV RBF
-    regressors.append(("fpls_basis+svm_rbf",
-                       Pipeline([
-                           ("basis", Basis()),
-                           ("dim_red", FPLS()),
-                           ("reg", SVR(kernel='rbf'))]),
-                       {**params_basis, **params_dim_red, **params_svm}
-                       ))
-    """
-
-    """
-    # PCA+SVM RBF
-    regressors.append(("pca+svm_rbf",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("dim_red", PCA(random_state=random_state)),
-                           ("reg", SVR(kernel='rbf'))]),
-                       {**params_dim_red, **params_svm}
-                       ))
-
-    # PLS+SMV RBF
-    regressors.append(("pls+svm_rbf",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("dim_red", PLSRegressionWrapper()),
-                           ("reg", SVR(kernel='rbf'))]),
-                       {**params_dim_red, **params_svm}
-                       ))
-
-    # RMH+SVM RBF
-    regressors.append(("rmh+svm_rbf",
-                       Pipeline([
-                           ("var_sel", RMH()),
-                           ("reg", SVR(kernel='rbf'))]),
-                       params_svm
-                       ))
-
-    """
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # mRMR+SVM RBF
-    regressors.append(("mRMR+svm_rbf",
-                       Pipeline([
-                           ("var_sel", mRMR()),
-                           ("reg", SVR(kernel='rbf'))]),
-                       {**params_mrmr, **params_svm}
-                       ))
-    """
-
-    """
     FUNCTIONAL MODELS
     """
 
@@ -751,7 +679,7 @@ def linear_regression_comparison_suite(
              computationally efficient and seems to improve the performance."""
 
     # Fixed basis + Functional Linear Regression
-    regressors.append(("flin_basis",
+    regressors.append(("flin",
                        Pipeline([
                            ("basis", Basis()),
                            ("reg", FLinearRegression())]),
@@ -783,18 +711,11 @@ def linear_regression_comparison_suite(
     """
 
     # Fixed basis + FPLS1 regression
-    regressors.append(("fpls1_basis",
+    regressors.append(("fpls1",
                        Pipeline([
                            ("basis", Basis()),
                            ("reg", FPLS())]),
                        {**params_basis, **params_pls}
-                       ))
-
-    # KNeighbors Functional Regression
-    regressors.append(("fknn",
-                       Pipeline([
-                           ("reg", KNeighborsRegressor())]),
-                       params_knn
                        ))
 
     return regressors
@@ -802,18 +723,13 @@ def linear_regression_comparison_suite(
 
 def logistic_regression_comparison_suite(
     params_clf,
-    params_base_regressors_ridge,
-    params_base_regressors_lasso,
     params_base_regressors_pls,
-    params_base_regressors_fpls,
-    params_base_regressors_apls,
     params_select,
     params_dim_red,
     params_var_sel,
-    params_svm,
     params_depth,
     params_knn,
-    params_basis,
+    params_flr,
     random_state=None
 ):
     classifiers = []
@@ -822,111 +738,37 @@ def logistic_regression_comparison_suite(
     MULTIVARIATE MODELS
     """
 
-    """
-    DATA SHOULD NOT BE CENTERED
-    # Optimal bayes rule in the discrete case (QDA)
-    classifiers.append(("optimal_bayes",
+    # LR
+    classifiers.append(("log",
                        Pipeline([
-                           ("clf", NaiveGPClassifier(np.mean(Y == 1)))]),
-                       {}
-                        ))
-    """
-
-    # LDA (based on FPCA+Ridge regression)
-    classifiers.append(("lda_fpca+ridge",
-                       Pipeline([
-                           ("dim_red", FPCA()),
-                           ("clf", LDA())]),
-                       {**params_dim_red, **params_base_regressors_ridge}
+                           ("data_matrix", DataMatrix()),
+                           ("clf", LogisticRegression(
+                               random_state=random_state))]),
+                       params_clf
                         ))
 
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # LDA (based on FPLS (fixed basis)+Ridge regression)
-    classifiers.append(("lda_fpls_basis+ridge",
-                       Pipeline([
-                           ("basis", Basis()),
-                           ("dim_red", FPLS()),
-                           ("clf", LDA())]),
-                       {**params_basis,
-                        **params_dim_red,
-                        **params_base_regressors_ridge}
-                        ))
-    """
-
-    # LDA (based on Lasso regression)
-    classifiers.append(("lda_lasso",
+    # LDA
+    classifiers.append(("lda",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
                            ("clf", LDA())]),
-                       params_base_regressors_lasso
+                        {}
                         ))
 
-    # LDA (based on PLS1 regression)
-    classifiers.append(("lda_pls1",
+    # QDA
+    classifiers.append(("qda",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
-                           ("clf", LDA())]),
-                       params_base_regressors_pls
+                           ("clf", QDA())]),
+                        {}
                         ))
-
-    # LDA (based on Manual+Ridge regression)
-    classifiers.append(("lda_manual+ridge",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("selector", FeatureSelector()),
-                           ("clf", LDA())]),
-                       {**params_select, **params_base_regressors_ridge}
-                        ))
-
-    # LDA (based on PCA+Ridge regression)
-    classifiers.append(("lda_pca+ridge",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("dim_red", PCA(random_state=random_state)),
-                           ("clf", LDA())]),
-                       {**params_dim_red, **params_base_regressors_ridge}
-                        ))
-
-    # LDA (based on PLS+Ridge regression)
-    classifiers.append(("lda_pls+ridge",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("dim_red", PLSRegressionWrapper()),
-                           ("clf", LDA())]),
-                       {**params_dim_red, **params_base_regressors_ridge}
-                        ))
-
-    # LDA (based on RMH+Ridge regression)
-    classifiers.append(("lda_rmh+ridge",
-                       Pipeline([
-                           ("var_sel", RMH()),
-                           ("clf", LDA())]),
-                       params_base_regressors_ridge
-                        ))
-
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # LDA (based on mRMR+Ridge regression)
-    classifiers.append(("lda_mRMR+ridge",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("var_sel", mRMR()),
-                           ("clf", LDA())]),
-                       {**params_var_sel,
-                        **params_mrmr,
-                        **params_base_regressors_ridge}
-                       ))
-    """
 
     """
     VARIABLE SELECTION + MULTIVARIATE MODELS
     """
 
     # Manual+LR
-    classifiers.append(("manual_sel+logistic",
+    classifiers.append(("manual+log",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
                            ("selector", FeatureSelector()),
@@ -936,7 +778,7 @@ def logistic_regression_comparison_suite(
                         ))
 
     # FPCA+LR
-    classifiers.append(("fpca+logistic",
+    classifiers.append(("fpca+log",
                        Pipeline([
                            ("dim_red", FPCA()),  # Retains scores only
                            ("clf", LogisticRegression(
@@ -945,7 +787,7 @@ def logistic_regression_comparison_suite(
                         ))
 
     # PCA+LR
-    classifiers.append(("pca+logistic",
+    classifiers.append(("pca+log",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
                            ("dim_red", PCA(random_state=random_state)),
@@ -954,243 +796,87 @@ def logistic_regression_comparison_suite(
                        {**params_dim_red, **params_clf}
                         ))
 
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # FPLS (fixed basis)+LR
-    classifiers.append(("fpls_basis+logistic",
-                       Pipeline([
-                           ("basis", Basis()),
-                           ("dim_red", FPLS()),
-                           ("clf", LogisticRegression(random_state=SEED))]),
-                       {**params_basis, **params_dim_red, **params_clf}
-                        ))
-    """
-
     # PLS+LR
-    classifiers.append(("pls+logistic",
+    classifiers.append(("pls+log",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
                            ("dim_red", PLSRegressionWrapper()),
+                           ("clf", LogisticRegression(
+                               random_state=random_state))]),
+                       {**params_dim_red, **params_clf}
+                        ))
+
+    # APLS+LR
+    classifiers.append(("apls+log",
+                       Pipeline([
+                           ("dim_red", APLS()),
                            ("clf", LogisticRegression(
                                random_state=random_state))]),
                        {**params_dim_red, **params_clf}
                         ))
 
     # RKVS+LR
-    classifiers.append(("rkvs+logistic",
+    classifiers.append(("rkvs+log",
                        Pipeline([
                            ("var_sel", RKVS()),
                            ("clf", LogisticRegression(
                                random_state=random_state))]),
-                       params_var_sel
-                        ))
-
-    # RMH+LR
-    classifiers.append(("rmh+logistic",
-                       Pipeline([
-                           ("var_sel", RMH()),
-                           ("clf", LogisticRegression(
-                               random_state=random_state))]),
-                       {}
-                        ))
-
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # mRMR+LR
-    classifiers.append(("mRMR+logistic",
-                       Pipeline([
-                           ("var_sel", mRMR()),
-                           ("clf", LogisticRegression(random_state=SEED))]),
-                       {**params_var_sel, **params_mrmr}
-                        ))
-    """
-
-    """
-    # Manual+SVM Linear
-    classifiers.append(("manual_sel+svm_lin",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("selector", FeatureSelector()),
-                           ("clf", LinearSVC(random_state=random_state))]),
-                       {**params_select, **params_clf}
-                        ))
-
-    # FPCA+SVM Linear
-    classifiers.append(("fpca+svm_lin",
-                       Pipeline([
-                           ("dim_red", FPCA()),  # Retains scores only
-                           ("clf", LinearSVC(random_state=random_state))]),
-                       {**params_dim_red, **params_clf}
-                        ))
-
-    # PCA+SVM Linear
-    classifiers.append(("pca+svm_lin",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("dim_red", PCA(random_state=random_state)),
-                           ("clf", LinearSVC(random_state=random_state))]),
-                       {**params_dim_red, **params_clf}
-                        ))
-    """
-
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # FPLS (fixed basis)+SVM Linear
-    classifiers.append(("fpls_basis+svm_lin",
-                       Pipeline([
-                           ("basis", Basis()),
-                           ("dim_red", FPLS()),
-                           ("clf", LinearSVC(random_state=SEED))]),
-                       {**params_basis, **params_dim_red, **params_clf}
-                        ))
-    """
-
-    """
-    # PLS+SVM Linear
-    classifiers.append(("pls+svm_lin",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("dim_red", PLSRegressionWrapper()),
-                           ("clf", LinearSVC(random_state=random_state))]),
-                       {**params_dim_red, **params_clf}
-                        ))
-
-    # RKVS+SVM Linear
-    classifiers.append(("rkvs+svm_lin",
-                       Pipeline([
-                           ("var_sel", RKVS()),
-                           ("clf", LinearSVC(random_state=random_state))]),
                        {**params_var_sel, **params_clf}
                         ))
 
-    # RMH+SVM Linear
-    classifiers.append(("rmh+svm_lin",
+    # RMH+LR
+    classifiers.append(("rmh+log",
                        Pipeline([
                            ("var_sel", RMH()),
-                           ("clf", LinearSVC(random_state=random_state))]),
+                           ("clf", LogisticRegression(
+                               random_state=random_state))]),
                        params_clf
                         ))
-    """
 
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # mRMR+SVM Linear
-    classifiers.append(("mRMR+svm_lin",
-                       Pipeline([
-                           ("var_sel", mRMR()),
-                           ("clf", LinearSVC(random_state=SEED))]),
-                       {**params_var_sel, **params_mrmr, **params_clf}
-                        ))
-    """
-
-    """
-    # Manual+SVM RBF
-    classifiers.append(("manual_sel+svm_rbf",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("selector", FeatureSelector()),
-                           ("clf", SVC(kernel='rbf'))]),
-                       {**params_select, **params_clf, **params_svm}
-                        ))
-
-    # FPCA+SVM RBF
-    classifiers.append(("fpca+svm_rbf",
-                       Pipeline([
-                           ("dim_red", FPCA()),  # Retains scores only
-                           ("clf", SVC(kernel='rbf'))]),
-                       {**params_dim_red, **params_clf, **params_svm}
-                        ))
-
-    # PCA+SVM RBF
-    classifiers.append(("pca+svm_rbf",
+    # PCA+QDA (Galeano et al. 2015)
+    classifiers.append(("pca+qda",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
                            ("dim_red", PCA(random_state=random_state)),
-                           ("clf", SVC(kernel='rbf'))]),
-                       {**params_dim_red, **params_clf, **params_svm}
+                           ("clf", QDA())]),
+                       params_dim_red
                         ))
-    """
 
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # FPLS (fixed basis)+SVM RBF
-    classifiers.append(("fpls_basis+svm_rbf",
-                       Pipeline([
-                           ("basis", Basis()),
-                           ("dim_red", FPLS()),
-                           ("clf", SVC(kernel='rbf'))]),
-                       {**params_basis,
-                        **params_dim_red,
-                        **params_clf,
-                        **params_svm}
-                        ))
-    """
-
-    """
-    # PLS+SVM RBF
-    classifiers.append(("pls+svm_rbf",
+    # PLS+Nearest centroid
+    classifiers.append(("pls+nc",
                        Pipeline([
                            ("data_matrix", DataMatrix()),
                            ("dim_red", PLSRegressionWrapper()),
-                           ("clf", SVC(kernel='rbf'))]),
-                       {**params_dim_red, **params_clf, **params_svm}
+                           ("clf", NearestCentroid())]),
+                       params_dim_red
                         ))
 
-    # RKVS+SVM RBF
-    classifiers.append(("rkvs+svm_rbf",
+    # APLS+Nearest centroid (Delaigle and Hall 2012)
+    classifiers.append(("apls+nc",
                        Pipeline([
-                           ("var_sel", RKVS()),
-                           ("clf", SVC(kernel='rbf'))]),
-                       {**params_var_sel, **params_clf, **params_svm}
+                           ("dim_red", APLS()),
+                           ("clf", NearestCentroid())]),
+                       params_dim_red
                         ))
-
-    # RMH+SVM RBF
-    classifiers.append(("rmh+svm_rbf",
-                       Pipeline([
-                           ("var_sel", RMH()),
-                           ("clf", SVC(kernel='rbf'))]),
-                       {**params_clf, **params_svm}
-                        ))
-
-    """
-    """
-    TARDA DEMASIADO (búsqueda en CV demasiado grande?)
-
-    # mRMR+SVM RBF
-    classifiers.append(("mRMR+svm_rbf",
-                       Pipeline([
-                           ("var_sel", mRMR()),
-                           ("clf", SVC(kernel='rbf'))]),
-                       {**params_var_sel,
-                        **params_mrmr,
-                        **params_clf,
-                        **params_svm}
-                        ))
-    """
 
     """
     FUNCTIONAL MODELS
     """
 
-    """
-    TARDA BASTANTE
-
-    # Functional Logistic Regression Model (testing)
-    from _logistic_regression_TEMP import LogisticRegression \
-        as FLogisticRegression
-    params_flr = {"clf__p": n_components}
-
-    classifiers.append(("flr",
+    # Functional logistic regression (Berrendero et al. 2021)
+    classifiers.append(("flog",
                        Pipeline([
-                           ("clf", FLogisticRegression())]),
+                           ("clf", FLR())]),
                        params_flr
                         ))
-    """
+
+    # FLDA (based on PLS1 regression, see Preda and Saporta 2007)
+    classifiers.append(("flda",
+                       Pipeline([
+                           ("data_matrix", DataMatrix()),
+                           ("clf", FLDA())]),
+                       params_base_regressors_pls
+                        ))
 
     # Maximum Depth Classifier
     classifiers.append(("mdc",
@@ -1209,59 +895,8 @@ def logistic_regression_comparison_suite(
     # Nearest Centroid Functional Classification
     classifiers.append(("fnc",
                        Pipeline([
-                           ("clf", NearestCentroid())]),
+                           ("clf", FNC())]),
                        {}
-                        ))
-
-    # NOTE: while not strictly necessary, the test data undergoes the
-    # same basis expansion process as the training data. This is more
-    # computationally efficient and seems to improve the performance.
-
-    # Functional LDA (based on L^2-regression with fixed basis)
-    classifiers.append(("flda_l2_basis",
-                       Pipeline([
-                           ("basis", Basis()),
-                           ("clf", LDA())]),
-                       params_basis
-                        ))
-
-    """
-    TARDA BASTANTE (cálculo de Gram matrix costoso en la base)
-
-    # Functional LDA (based on L^2-regression with FPCA basis)
-    classifiers.append(("flda_l2_khl",
-                       Pipeline([
-                           ("basis", FPCABasis()),
-                           ("clf", LDA())]),
-                       params_basis_fpca
-                        ))
-    """
-
-    """
-    TARDA BASTANTE (cálculo de Gram matrix costoso en la base)
-
-    # Functional LDA (based on L^2-regression with FPLS basis)
-    classifiers.append(("flda_l2_fpls",
-                       Pipeline([
-                           ("basis", Basis()),
-                           ("clf", LDA())]),
-                       params_basis_fpls
-                        ))
-    """
-
-    # Functional LDA (based on FPLS1 regression with fixed basis)
-    classifiers.append(("flda_fpls1_basis",
-                       Pipeline([
-                           ("basis", Basis()),
-                           ("clf", LDA())]),
-                       {**params_basis, **params_base_regressors_fpls}
-                        ))
-
-    # Functional LDA (based on APLS regression)
-    classifiers.append(("flda_apls",
-                       Pipeline([
-                           ("clf", LDA())]),
-                       params_base_regressors_apls
                         ))
 
     return classifiers

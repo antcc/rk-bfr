@@ -60,6 +60,7 @@ class ThetaSpace():
         dim_name="theta",
         tau_range=(0, 1),
         beta_range=None,
+        sigma2_ub=np.inf,
         tau_ttr=Identity(),
         sigma2_ttr=LogSq()
     ):
@@ -77,6 +78,7 @@ class ThetaSpace():
         self.dim_name = dim_name
         self.tau_range = tau_range
         self.beta_range = beta_range
+        self.sigma2_ub = sigma2_ub
         self.tau_ttr = tau_ttr
         self.sigma2_ttr = sigma2_ttr
 
@@ -118,6 +120,7 @@ class ThetaSpace():
             dim_name=self.dim_name,
             tau_range=self.tau_range,
             beta_range=self.beta_range,
+            sigma2_ub=self.sigma2_ub,
             tau_ttr=self.tau_ttr,
             sigma2_ttr=self.sigma2_ttr
         )
@@ -214,7 +217,7 @@ class ThetaSpace():
         theta_clp[..., self.sigma2_idx] = np.clip(
             theta_clp[..., self.sigma2_idx],
             self.eps,
-            None
+            self.sigma2_ub,
         )
 
         return theta_clp.squeeze()
@@ -521,6 +524,10 @@ def log_prior_linear_logistic(
     if ((tau_full < theta_space.tau_range[0]).any()
             or (tau_full > theta_space.tau_range[1]).any()):
         return -np.inf
+
+    if theta_space.sigma2_ub is not None:
+        if sigma2 > theta_space.sigma2_ub:
+            return -np.inf
 
     if sigma2 <= theta_space.eps:
         return -np.inf

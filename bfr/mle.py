@@ -55,7 +55,7 @@ def compute_mle(
     tau_ttr_lb = theta_space.tau_ttr.forward(theta_space.tau_range[0])
     tau_ttr_ub = theta_space.tau_ttr.forward(theta_space.tau_range[1])
     sigma2_ttr_lb = theta_space.sigma2_ttr.forward(theta_space.eps)
-    sigma2_ttr_ub = theta_space.sigma2_ttr.forward(np.inf)
+    sigma2_ttr_ub = theta_space.sigma2_ttr.forward(theta_space.sigma2_ub)
     if np.isinf(sigma2_ttr_ub):
         sigma2_ttr_ub = None
 

@@ -7,6 +7,7 @@ _*.md
 _*.txt
 *TEMP*
 *temp*
+*test*.py
 
 # Ignore cluster files
 slurm*
@@ -19,11 +20,6 @@ launch*.sh
 #results*/*
 html/
 
-# Ignore helper files
-graphs.ipynb
-test.py
-temp.py
-
 # Ignore pickled files
 *.mcmc
 *.idata
@@ -32,7 +28,7 @@ temp.py
 # Ignore jupyter notebook files
 .ipynb_checkpoints/
 
-# Latexmk
+# Ignore Latexmk files
 *.tex.swp
 *.fdb_latexmk
 *.aux
@@ -69,6 +65,6 @@ temp.py
 *.synctex.gz
 *.synctex
 
-# BibTeX
+# Ignore BibTeX files
 *.bbl
 *.blg

@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 from bfr import preprocessing, simulation
-from bfr._fpls import APLS, FPLS, FPLSBasis
+from bfr._fpls import FPLSBasis
 from bfr.bayesian_model import ThetaSpace, probability_to_label
 from bfr.mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
                               BFLogisticPymc)
@@ -28,7 +28,7 @@ from skfda.preprocessing.smoothing.kernel_smoothers import \
     NadarayaWatsonSmoother as NW
 from skfda.representation.basis import BSpline, Fourier
 from skfda.representation.grid import FDataGrid
-from sklearn.linear_model import Lasso, LogisticRegressionCV, Ridge, RidgeCV
+from sklearn.linear_model import LogisticRegressionCV, RidgeCV
 from sklearn.metrics import accuracy_score, mean_squared_error
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
@@ -53,7 +53,7 @@ VERBOSE = True
 PRECOMPUTE_MLE = True
 PRINT_TO_FILE = False
 SAVE_RESULTS = False
-PRINT_PATH = "../results/"  # /home/antcc/bayesian-functional-regression/results/
+PRINT_PATH = "results/"  # /home/antcc/bayesian-functional-regression/results/
 SAVE_PATH = PRINT_PATH + "out/"
 
 
@@ -123,12 +123,16 @@ def get_arg_parser():
         help="smooth functional data as part of preprocessing"
     )
     parser.add_argument(
-        "--train-size", type=float, default=0.7,
+        "--train-size", type=float, default=0.5,
         help="fraction of data used for training"
     )
     parser.add_argument(
         "--noise", type=float, default=0.1,
         help="fraction of noise for logistic synthetic data"
+    )
+    parser.add_argument(
+        "--standardize", action="store_true",
+        help="whether to consider predictors with unit variance."
     )
 
     # Optional MCMC arguments
@@ -287,7 +291,7 @@ def get_data_linear(
     else:  # Real data
         if model_type == "tecator":
             X_fd, y = fetch_tecator(return_X_y=True)
-            y = y[:, 1]  # Fat level
+            y = np.sqrt(y[:, 1])  # Sqrt-Fat level
         elif model_type == "moisture":
             data = fetch_cran("Moisturespectrum", "fds")["Moisturespectrum"]
             y = fetch_cran("Moisturevalues", "fds")["Moisturevalues"]
@@ -401,11 +405,10 @@ def get_data_logistic(
 
 def get_reference_models_linear(X, y, seed):
     alphas = np.logspace(-4, 4, 20)
-    n_selected = [5, 10, 15, 20, 25, len(X.grid_points[0])]
-    n_components = [2, 3, 4, 5, 10]
+    n_selected = [5, 10, 15, 20, 25, 50]
+    n_components = [2, 3, 4, 5, 7, 10, 15, 20]
     n_basis_bsplines = [8, 10, 12, 14, 16]
     n_basis_fourier = [3, 5, 7, 9, 11]
-    n_neighbors = [3, 5, 7]
 
     basis_bspline = [BSpline(n_basis=p) for p in n_basis_bsplines]
     basis_fourier = [Fourier(n_basis=p) for p in n_basis_fourier]
@@ -419,27 +422,21 @@ def get_reference_models_linear(X, y, seed):
             continue
 
     params_regularizer = {"reg__alpha": alphas}
-    params_svm = {"reg__C": alphas,
-                  "reg__gamma": ['auto', 'scale']}
     params_select = {"selector__p": n_selected}
     params_pls = {"reg__n_components": n_components}
     params_dim_red = {"dim_red__n_components": n_components}
     params_basis = {"basis__basis": basis_bspline + basis_fourier}
     # params_basis_fpca = {"basis__n_basis": n_components}
     # params_basis_fpls = {"basis__basis": basis_fpls}
-    params_knn = {"reg__n_neighbors": n_neighbors,
-                  "reg__weights": ['uniform', 'distance']}
     # params_mrmr = {"var_sel__method": ["MID", "MIQ"],
-    #                "var_sel__n_features_to_select": n_components}
+    #               "var_sel__n_features_to_select": n_components}
 
     regressors = linear_regression_comparison_suite(
         params_regularizer,
         params_select,
         params_dim_red,
-        params_svm,
         params_basis,
         params_pls,
-        params_knn,
         random_state=seed
     )
 
@@ -448,76 +445,56 @@ def get_reference_models_linear(X, y, seed):
 
 def get_reference_models_logistic(X, y, seed):
     Cs = np.logspace(-4, 4, 20)
-    n_selected = [5, 10, 15, 20, 25, len(X.grid_points[0])]
-    n_components = [2, 3, 4, 5, 10]
-    n_basis_bsplines = [8, 10, 12, 14, 16]
-    n_basis_fourier = [3, 5, 7, 9, 11]
-    n_neighbors = [3, 5, 7]
+    n_selected = [5, 10, 15, 20, 25, 50]
+    n_components = [2, 3, 4, 5, 7, 10, 15, 20]
+    n_neighbors = [3, 5, 7, 11]
 
-    basis_bspline = [BSpline(n_basis=p) for p in n_basis_bsplines]
-    basis_fourier = [Fourier(n_basis=p) for p in n_basis_fourier]
-
-    basis_fpls = []
-    for p in n_components:
-        try:
-            basis_fpls.append(FPLSBasis(X, y, n_basis=p))
-        except ValueError:
-            print(f"Can't create FPLSBasis with n_basis={p}")
-            continue
-
-    ridge_regressors = [Ridge(alpha=C) for C in Cs]
-    lasso_regressors = [Lasso(alpha=C) for C in Cs]
-    pls_regressors = [PLSRegressionWrapper(
-        n_components=p) for p in n_components]
-    fpls_regressors = [FPLS(n_components=p) for p in n_components]
-    apls_regressors = [APLS(n_components=p) for p in n_components]
+    pls_regressors = [
+        PLSRegressionWrapper(n_components=p) for p in n_components]
 
     params_clf = {"clf__C": Cs}
-    params_svm = {"clf__gamma": ['auto', 'scale']}
     params_select = {"selector__p": n_selected}
     params_dim_red = {"dim_red__n_components": n_components}
-    params_basis = {"basis__basis": basis_bspline + basis_fourier}
-    # params_basis_fpca = {"basis__n_basis": n_components}
-    # params_basis_fpls = {"basis__basis": basis_fpls}
     params_var_sel = {"var_sel__n_features_to_select": n_components}
+    params_flr = {"clf__p": n_components}
     params_knn = {"clf__n_neighbors": n_neighbors,
                   "clf__weights": ['uniform', 'distance']}
     params_depth = {"clf__depth_method": [
         ModifiedBandDepth(), IntegratedDepth()]}
     # params_mrmr = {"var_sel__method": ["MID", "MIQ"]}
-    params_base_regressors_ridge = {"clf__base_regressor": ridge_regressors}
-    params_base_regressors_lasso = {"clf__base_regressor": lasso_regressors}
     params_base_regressors_pls = {"clf__base_regressor": pls_regressors}
-    params_base_regressors_fpls = {"clf__base_regressor": fpls_regressors}
-    params_base_regressors_apls = {"clf__base_regressor": apls_regressors}
 
     classifiers = logistic_regression_comparison_suite(
         params_clf,
-        params_base_regressors_ridge,
-        params_base_regressors_lasso,
         params_base_regressors_pls,
-        params_base_regressors_fpls,
-        params_base_regressors_apls,
         params_select,
         params_dim_red,
         params_var_sel,
-        params_svm,
         params_depth,
         params_knn,
-        params_basis,
+        params_flr,
         random_state=seed,
     )
 
     return classifiers
 
 
-def get_theta_space_wrapper(grid, include_p, theta_names, tau_range):
+def get_theta_space_wrapper(
+    grid,
+    include_p,
+    theta_names,
+    tau_range,
+    beta_range,
+    sigma2_ub
+):
     return lambda p: ThetaSpace(
         p,
         grid,
         include_p=include_p,
         names=theta_names,
         tau_range=tau_range,
+        beta_range=beta_range,
+        sigma2_ub=sigma2_ub
     )
 
 
@@ -717,17 +694,12 @@ def bayesian_cv(
 
 
 def find_best_estimator_cv(mean_score_cv, est_cv):
-    best_score = -np.inf
-    best_estimator = None
-    best_strategy = None
+    best_estimators = {}
     for k, v in mean_score_cv.items():
         max_score_idx = np.unravel_index(v.argmax(), v.shape)
-        if v[max_score_idx] > best_score:
-            best_score = v[max_score_idx]
-            best_strategy = k
-            best_estimator = est_cv[max_score_idx]
+        best_estimators[k] = est_cv[max_score_idx]
 
-    return best_estimator, best_strategy
+    return best_estimators
 
 
 ###################################################################
@@ -780,6 +752,7 @@ def main():
         params_cv_names = ["p"] + params_cv_names
 
     # MCMC parameters
+    beta_range = (-500, 500)
     moves = None
     step_fn = None
     step_kwargs = None
@@ -802,7 +775,7 @@ def main():
             step_fn = pm.Metropolis
             step_kwargs = {}
 
-    # Misc. parameters
+    # Names
     theta_names = ["β", "τ", "α0", "σ2"]
     if include_p:
         theta_names = ["p"] + theta_names
@@ -813,6 +786,7 @@ def main():
     else:
         score_column = "Acc"
         all_estimates = ["posterior_mean", "posterior_vote"] + point_estimates
+    columns_name = ["Estimator", "Mean " + score_column, "SD"]
 
     ##
     # GET DATASET
@@ -862,22 +836,23 @@ def main():
             rng=rng
         )
 
+    # Set data-dependent parameters
+    sigma2_ub = 10*y.var() if args.kind == "linear" else np.inf
+
     ##
     # RANDOM SPLITS LOOP
     ##
 
     score_ref_best = defaultdict(lambda: [])
-    score_bayesian_best = np.zeros(args.n_reps)
-    score_var_sel_best = np.zeros(args.n_reps)
+    score_bayesian_best = defaultdict(lambda: [])
+    score_var_sel_best = defaultdict(lambda: [])
     score_bayesian_all = []
     score_var_sel_all = []
-    bayesian_strategy_count = defaultdict(lambda: 0)
-    var_sel_strategy_count = defaultdict(lambda: 0)
     exec_times = np.zeros((args.n_reps, 2))  # (splits, (ref, bayesian))
 
     # Get wrappers for parameter space and bayesian regressor
     theta_space_wrapper = get_theta_space_wrapper(
-        grid, include_p, theta_names, tau_range)
+        grid, include_p, theta_names, tau_range, beta_range, sigma2_ub)
     if PRECOMPUTE_MLE:
         mle_wrapper = get_mle_wrapper(
             mle_method, mle_strategy, args.kind,
@@ -921,7 +896,7 @@ def main():
 
             # Standardize data
             X_train, X_test = preprocessing.standardize_predictors(
-                X_train, X_test)
+                X_train, X_test, scale=args.standardize)
 
             ##
             # RUN REFERENCE ALGORITHMS
@@ -977,6 +952,7 @@ def main():
                 print(f"(It. {rep + 1}/{args.n_reps}) Running {total_models} "
                       f"bayesian RKHS {args.kind} models...")
 
+            # Perform K-fold cross validation on training set
             score_bayesian_cv, score_var_sel_cv, est_cv = bayesian_cv(
                 X_train,
                 y_train,
@@ -997,61 +973,63 @@ def main():
                 verbose=VERBOSE
             )
 
+            # Save CV results
+            score_bayesian_all.append(dict(score_bayesian_cv))
+            score_var_sel_all.append(dict(score_var_sel_cv))
+
             # Compute mean score across folds
             mean_score_bayesian_cv = {
                 k: v.mean(axis=0) for k, v in score_bayesian_cv.items()}
             mean_score_var_sel_cv = {
                 k: v.mean(axis=0) for k, v in score_var_sel_cv.items()}
 
-            # Save CV results
-            score_bayesian_all.append(mean_score_bayesian_cv)
-            score_var_sel_all.append(mean_score_var_sel_cv)
-
-            # Get best bayesian model (i.e. the best strategy)
-            best_estimator_bayesian, best_strategy_bayesian = \
+            # Get best bayesian models
+            # (i.e. best hyperparameters for each strategy)
+            best_estimator_bayesian = \
                 find_best_estimator_cv(mean_score_bayesian_cv, est_cv)
 
-            # Get best variable selection model (i.e. the best point estimate)
-            best_estimator_var_sel, best_pe_var_sel = \
+            # Get best variable selection model
+            # (i.e. best hyperparameters for each point estimate)
+            best_estimator_var_sel = \
                 find_best_estimator_cv(mean_score_var_sel_cv, est_cv)
 
-            # Forget previous data-dependent MLE
-            new_params_mle = {
-                "mle_precomputed": None,
+            # Refit best models on the whole train set and predict on test set
+            if VERBOSE:
+                print("  * Refitting best bayesian models")
+
+            # New parameters for refitting
+            new_params_mcmc = {
+                "mle_precomputed": None,  # Forget previous data-dependent MLE
                 "n_reps_mle": 2*args.n_reps_mle
             }
-            best_estimator_bayesian.set_params(**new_params_mle)
-            best_estimator_var_sel.set_params(**new_params_mle)
 
-            # Keep track of how often each strategy was the best
-            bayesian_strategy_count[best_strategy_bayesian] += 1
-            var_sel_strategy_count[best_pe_var_sel] += 1
+            # Refit & store predictions for bayesian models
+            for strategy, estimator_bayesian in best_estimator_bayesian.items():
+                estimator_bayesian.set_params(**new_params_mcmc)
+                estimator_bayesian.fit(X_train, y_train)
+                y_pred_bayesian = estimator_bayesian.predict(
+                    X_test, strategy=strategy)
+                if args.kind == "linear":
+                    score_bayesian = mean_squared_error(y_test, y_pred_bayesian)
+                else:
+                    score_bayesian = accuracy_score(y_test, y_pred_bayesian)
+                score_bayesian_best[strategy].append(score_bayesian)
 
-            # Refit best models on the whole training set
             if VERBOSE:
-                print("  * Refitting best models")
+                print("  * Refitting best variable selection models")
 
-            best_estimator_bayesian.fit(X_train, y_train)
-            best_estimator_var_sel.fit(X_train, y_train)
-
-            # Compute predictions on the hold-out set
-            y_pred_bayesian = best_estimator_bayesian.predict(
-                X_test, strategy=best_strategy_bayesian)
-            y_pred_var_sel = bayesian_variable_selection_predict(
-                X_train, y_train, X_test,
-                best_pe_var_sel, best_estimator_var_sel,
-                est_multiple)
-
-            # Save score of best models
-            if args.kind == "linear":
-                score_bayesian = mean_squared_error(y_test, y_pred_bayesian)
-                score_var_sel = mean_squared_error(y_test, y_pred_var_sel)
-            else:
-                score_bayesian = accuracy_score(y_test, y_pred_bayesian)
-                score_var_sel = accuracy_score(y_test, y_pred_var_sel)
-
-            score_bayesian_best[rep] = score_bayesian
-            score_var_sel_best[rep] = score_var_sel
+            # Refit & store predictions for variable selection models
+            for pe, estimator_var_sel in best_estimator_var_sel.items():
+                estimator_var_sel.set_params(**new_params_mcmc)
+                estimator_var_sel.fit(X_train, y_train)
+                y_pred_var_sel = bayesian_variable_selection_predict(
+                    X_train, y_train, X_test, pe,
+                    estimator_var_sel, est_multiple)
+                if args.kind == "linear":
+                    score_var_sel = mean_squared_error(y_test, y_pred_var_sel)
+                else:
+                    score_var_sel = accuracy_score(y_test, y_pred_var_sel)
+                score_var_sel_best[pe].append(score_var_sel)
 
             exec_times[rep, 1] = time.time() - start
 
@@ -1066,28 +1044,22 @@ def main():
     mean_score_ref = [(k, np.mean(v), np.std(v))
                       for k, v in score_ref_best.items()]
 
-    mean_score_bayesian_var_sel = [
-        (
-            args.method,
-            np.mean(score_bayesian_best[:rep + 1]),
-            np.std(score_bayesian_best[:rep + 1]),
-            max(bayesian_strategy_count, key=bayesian_strategy_count.get)
-        ),
-        (
-            args.method + "+ridge",
-            np.mean(score_var_sel_best[:rep + 1]),
-            np.std(score_var_sel_best[:rep + 1]),
-            max(var_sel_strategy_count, key=var_sel_strategy_count.get)
-        )]
+    mean_score_bayesian = [(args.method + "_" + k, np.mean(v), np.std(v))
+                           for k, v in score_bayesian_best.items()]
+
+    var_sel_str = "ridge" if args.kind == "linear" else "logistic"
+    mean_score_var_sel = [
+        (args.method + "_" + k + "+" + var_sel_str, np.mean(v), np.std(v))
+        for k, v in score_var_sel_best.items()]
 
     df_metrics_ref = pd.DataFrame(
         mean_score_ref,
-        columns=["Estimator", "Mean " + score_column, "SD"]
+        columns=columns_name
     ).sort_values("Mean " + score_column, ascending=args.kind == "linear")
 
     df_metrics_bayesian_var_sel = pd.DataFrame(
-        mean_score_bayesian_var_sel,
-        columns=["Estimator", "Mean " + score_column, "SD", "Main strategy"]
+        mean_score_bayesian + mean_score_var_sel,
+        columns=columns_name
     ).sort_values("Mean " + score_column, ascending=args.kind == "linear")
 
     ##
@@ -1211,13 +1183,11 @@ def main():
             )
             df.to_csv(SAVE_PATH + filename + ".csv", index=False)
 
-            # Save the mean CV results and strategy statistics to disk
+            # Save the CV results to disk
             np.savez(
                 SAVE_PATH + filename + ".npz",
                 score_bayesian_all=score_bayesian_all,
                 score_var_sel_all=score_var_sel_all,
-                bayesian_strategy_count=dict(bayesian_strategy_count),
-                var_sel_strategy_count=dict(var_sel_strategy_count)
             )
     except Exception as ex:
         print(ex)
