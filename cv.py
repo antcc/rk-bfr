@@ -51,9 +51,9 @@ pd.set_option('display.max_columns', 80)
 RUN_REF_ALGS = True
 VERBOSE = True
 PRECOMPUTE_MLE = True
-PRINT_TO_FILE = False
-SAVE_RESULTS = False
-PRINT_PATH = "results/"  # /home/antcc/bayesian-functional-regression/results/
+PRINT_TO_FILE = True
+SAVE_RESULTS = True
+PRINT_PATH = "results/"
 SAVE_PATH = PRINT_PATH + "out/"
 
 
