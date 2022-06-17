@@ -149,7 +149,7 @@ def get_arg_parser():
         help="number of tune/warmup iterations in MCMC algorithm"
     )
     parser.add_argument(
-        "--n-burn", type=int, default=200,
+        "--n-burn", type=int, default=100,
         help="number of initial samples to discard in MCMC algorithm"
     )
     parser.add_argument(

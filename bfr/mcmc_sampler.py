@@ -156,7 +156,8 @@ class _BayesianRKHSFRegression(
                 skipna=ts.include_p,
                 bw=bw
             )
-            n_comp = theta_hat[ts.p_idx]
+
+            n_comp = theta_hat[ts.p_idx] if ts.include_p else ts.p_max
             tau_hat = theta_hat[ts.tau_idx][:ts.round_p(n_comp)]
 
             if not callable(pe) and ts.include_p:
