@@ -1,0 +1,59 @@
+
+*** Bayesian-RKHS Functional Linear Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+N_reps MLE: 4
+
+-- MODEL GENERATION --
+Total samples: 100
+Grid size: 141
+Train size: 66
+Smoothing: None
+Data name: moisture
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): [3, 4, 5, 6]
+Values of η: [0.001, 0.01, 0.1, 1, 10]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 900 + 100
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE ALGORITHMS --
+Mean split execution time: 31.427±2.811 s
+Total splits execution time: 5.238 min
+
+   Estimator  Mean MSE      SD
+       ridge     0.051   0.008
+   pls+ridge     0.052   0.009
+   pca+ridge     0.053   0.008
+  fpca+ridge     0.055   0.009
+manual+ridge     0.057   0.006
+        apls     0.057   0.009
+        pls1     0.061   0.014
+       fpls1     0.062   0.017
+       lasso     0.063   0.012
+        flin     0.073   0.013
+   rmh+ridge     0.543   0.438
+
+-- RESULTS EMCEE --
+Mean split execution time: 3890.602±113.359 s
+Total splits execution time: 648.434 min
+
+           Estimator  Mean MSE      SD
+emcee_posterior_mean     0.058   0.009
+  emcee_median+ridge     0.071   0.016
+    emcee_mode+ridge     0.094   0.065
+        emcee_median     0.109   0.102
+    emcee_mean+ridge     0.133   0.124
+          emcee_mode     0.901   2.414
+          emcee_mean     1.483   2.766

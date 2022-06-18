@@ -1,0 +1,60 @@
+
+*** Bayesian-RKHS Functional Linear Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+N_reps MLE: 4
+
+-- MODEL GENERATION --
+Total samples: 300
+Grid size: 100
+Train size: 200
+Smoothing: None
+Model type: L2
+X ~ GP(0, fractional_brownian_kernel)
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): {1: 0.1, 2: 0.2, 3: 0.4, 4: 0.3}
+Values of η: [0.001, 0.01, 0.1, 1, 10]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 900 + 100
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE ALGORITHMS --
+Mean split execution time: 49.153±0.795 s
+Total splits execution time: 8.192 min
+
+   Estimator  Mean MSE      SD
+        pls1     0.523   0.059
+   pls+ridge     0.524   0.062
+       ridge     0.524   0.059
+       fpls1     0.525   0.060
+   pca+ridge     0.526   0.062
+  fpca+ridge     0.526   0.062
+manual+ridge     0.528   0.064
+   rmh+ridge     0.528   0.060
+       lasso     0.530   0.061
+        flin     0.531   0.063
+        apls     0.532   0.064
+
+-- RESULTS EMCEE --
+Mean split execution time: 1138.695±9.657 s
+Total splits execution time: 189.783 min
+
+           Estimator  Mean MSE      SD
+    emcee_mean+ridge     0.534   0.055
+emcee_posterior_mean     0.536   0.063
+  emcee_median+ridge     0.537   0.068
+    emcee_mode+ridge     0.541   0.070
+          emcee_mode     1.658   0.733
+          emcee_mean     1.739   1.423
+        emcee_median     3.774   7.059

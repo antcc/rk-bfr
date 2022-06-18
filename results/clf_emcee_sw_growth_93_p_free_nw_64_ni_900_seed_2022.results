@@ -1,0 +1,68 @@
+
+*** Bayesian-RKHS Functional Logistic Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+N_reps MLE: 4
+
+-- MODEL GENERATION --
+Total samples: 93
+Grid size: 31
+Train size: 62
+Smoothing: None
+Data name: growth
+Noise: 10%
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): {1: 0.01, 2: 0.05, 3: 0.14, 4: 0.2, 5: 0.3, 6: 0.3}
+Values of η: [0.001, 0.01, 0.1, 1, 10]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 900 + 100
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE ALGORITHMS --
+Mean split execution time: 51.775±2.678 s
+Total splits execution time: 8.629 min
+
+ Estimator  Mean Acc        SD
+       log     0.965 3.043e-02
+  fpca+log     0.965 3.043e-02
+manual+log     0.961 3.161e-02
+   pca+log     0.958 2.903e-02
+   apls+nc     0.958 3.242e-02
+   pca+qda     0.958 3.242e-02
+   rmh+log     0.955 2.957e-02
+  apls+log     0.955 2.140e-02
+   pls+log     0.952 3.607e-02
+      flda     0.945 3.242e-02
+      fknn     0.942 4.029e-02
+      flog     0.935 4.997e-02
+  rkvs+log     0.923 5.241e-02
+       lda     0.894 5.211e-02
+    pls+nc     0.829 9.355e-02
+       fnc     0.735 1.116e-01
+       mdc     0.700 8.662e-02
+       qda     0.581 1.110e-16
+
+-- RESULTS EMCEE --
+Mean split execution time: 1582.304±187.615 s
+Total splits execution time: 263.717 min
+
+            Estimator  Mean Acc      SD
+ emcee_posterior_mean     0.923   0.046
+ emcee_posterior_vote     0.865   0.088
+  emcee_mode+logistic     0.832   0.169
+emcee_median+logistic     0.819   0.170
+           emcee_mode     0.784   0.177
+         emcee_median     0.777   0.140
+  emcee_mean+logistic     0.726   0.169
+           emcee_mean     0.619   0.186
