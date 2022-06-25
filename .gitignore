@@ -16,6 +16,9 @@ slurm*
 # Ignore launch files
 launch*.sh
 
+# Ignore data files
+data/
+
 # Ignore results files
 #results*/*
 html/

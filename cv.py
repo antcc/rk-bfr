@@ -11,16 +11,16 @@ import emcee
 import numpy as np
 import pandas as pd
 import pymc as pm
-from bfr import preprocessing, simulation
-from bfr._fpls import FPLSBasis
-from bfr.bayesian_model import ThetaSpace, probability_to_label
-from bfr.mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
-                              BFLogisticPymc)
-from bfr.mle import compute_mle
-from bfr.sklearn_utils import DataMatrix, PLSRegressionWrapper
-from bfr.utils import (bayesian_variable_selection_predict, cv_sk,
-                       linear_regression_comparison_suite,
-                       logistic_regression_comparison_suite)
+from rkbfr import preprocessing, simulation
+from rkbfr._fpls import FPLSBasis
+from rkbfr.bayesian_model import ThetaSpace, probability_to_label
+from rkbfr.mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
+                                BFLogisticPymc)
+from rkbfr.mle import compute_mle
+from rkbfr.sklearn_utils import DataMatrix, PLSRegressionWrapper
+from rkbfr.utils import (bayesian_variable_selection_predict, cv_sk,
+                         linear_regression_comparison_suite,
+                         logistic_regression_comparison_suite)
 from skfda.datasets import (fetch_cran, fetch_growth, fetch_medflies,
                             fetch_tecator)
 from skfda.exploratory.depth import IntegratedDepth, ModifiedBandDepth
@@ -32,7 +32,6 @@ from sklearn.linear_model import LogisticRegressionCV, RidgeCV
 from sklearn.metrics import accuracy_score, mean_squared_error
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
-
 
 ###################################################################
 # CONFIGURATION
@@ -200,17 +199,17 @@ def get_arg_parser():
     parser.add_argument(
         "data",
         help="type of data to use",
-        choices=["rkhs", "l2", "real"]
+        choices=["rkhs", "l2", "real", "mixture"]
     )
     data_group.add_argument(
         "--kernel",
         help="name of kernel to use in simulations",
-        choices=["ou", "sqexp", "fbm"]
+        choices=["ou", "sqexp", "fbm", "bm", "homoscedastic", "heteroscedastic"]
     )
     data_group.add_argument(
         "--data-name",
         help="name of data set to use as real data",
-        choices=["tecator", "moisture", "medflies", "growth"]
+        choices=["tecator", "moisture", "sugar", "medflies", "growth"]
     )
     p_group.add_argument(
         "--p-range",
@@ -249,9 +248,6 @@ def get_data_linear(
         rng = np.random.default_rng()
 
     if is_simulated_data:
-        if kernel_fn is None:
-            raise ValueError("Must provide a kernel function.")
-
         grid = np.linspace(tau_range[0] + 1./n_grid, tau_range[1], n_grid)
         alpha0_true = 5.
         sigma2_true = 0.5
@@ -291,16 +287,26 @@ def get_data_linear(
     else:  # Real data
         if model_type == "tecator":
             X_fd, y = fetch_tecator(return_X_y=True)
-            y = np.sqrt(y[:, 1])  # Sqrt-Fat level
+            data = X_fd.data_matrix[..., 0]
+            u, idx = np.unique(data, axis=0, return_index=True)  # Find repeated
+            X_fd = FDataGrid(data[idx], X_fd.grid_points[0]).derivative(order=2)
+            y = y[idx, 1]  # Sqrt-Fat level
         elif model_type == "moisture":
             data = fetch_cran("Moisturespectrum", "fds")["Moisturespectrum"]
             y = fetch_cran("Moisturevalues", "fds")["Moisturevalues"]
-            X_fd = FDataGrid(data["y"].T[:, ::5], data["x"][::5])
+            X_fd = FDataGrid(data["y"].T[:, ::7], data["x"][::7])
+        elif model_type == "sugar":
+            data = np.load('data/sugar.npz')
+            X_fd = FDataGrid(data['x'][:, ::5])
+            y = data['y']
         else:
-            raise ValueError("Real data set must be 'tecator' or 'aemet'.")
+            raise ValueError("Real data set must be 'tecator', "
+                             "'moisture' or 'sugar'.")
 
         grid = preprocessing.normalize_grid(
             X_fd.grid_points[0], tau_range[0], tau_range[1])
+
+        X_fd = FDataGrid(X_fd.data_matrix, grid)
 
     # Smooth data
     if initial_smoothing:
@@ -326,6 +332,8 @@ def get_data_logistic(
     noise=0.1,
     initial_smoothing=False,
     tau_range=(0, 1),
+    kernel_fn2=None,
+    mean_vector2=None,
     rng=None
 ):
     if rng is None:
@@ -336,40 +344,48 @@ def get_data_logistic(
             raise ValueError("Must provide a kernel function.")
 
         grid = np.linspace(tau_range[0] + 1./n_grid, tau_range[1], n_grid)
+        mean_vector = None
         alpha0_true = -0.5
 
-        if model_type == "l2":
-            if beta_coef is None:
-                raise ValueError("Must provide a coefficient function.")
+        if model_type == "mixture":
+            X, y = simulation.generate_classification_dataset(
+                grid, kernel_fn, kernel_fn2,
+                n_samples, rng,
+                mean_vector, mean_vector2)
 
-            X, y_lin = simulation.generate_gp_l2_dataset(
-                grid,
-                kernel_fn,
-                n_samples,
-                beta_coef,
-                alpha0_true,
-                0.0,
-                rng=rng
-            )
-        elif model_type == "rkhs":
-            beta_true = [-5., 1., 10.]
-            tau_true = [0.1, 0.4, 0.8]
-            X, y_lin = simulation.generate_gp_rkhs_dataset(
-                grid,
-                kernel_fn,
-                n_samples,
-                beta_true,
-                tau_true,
-                alpha0_true,
-                0.0,
-                rng=rng
-            )
         else:
-            raise ValueError("Invalid model generation strategy.")
+            if model_type == "l2":
+                if beta_coef is None:
+                    raise ValueError("Must provide a coefficient function.")
 
-        # Transform linear response for logistic model
-        y = probability_to_label(
-            y_lin, random_noise=noise, rng=rng)
+                X, y_lin = simulation.generate_gp_l2_dataset(
+                    grid,
+                    kernel_fn,
+                    n_samples,
+                    beta_coef,
+                    alpha0_true,
+                    0.0,
+                    rng=rng
+                )
+            elif model_type == "rkhs":
+                beta_true = [-5., 1., 10.]
+                tau_true = [0.1, 0.4, 0.8]
+                X, y_lin = simulation.generate_gp_rkhs_dataset(
+                    grid,
+                    kernel_fn,
+                    n_samples,
+                    beta_true,
+                    tau_true,
+                    alpha0_true,
+                    0.0,
+                    rng=rng
+                )
+            else:
+                raise ValueError("Invalid model generation strategy.")
+
+            # Transform linear response for logistic model
+            y = probability_to_label(
+                y_lin, random_noise=noise, rng=rng)
 
         # Create FData object
         X_fd = FDataGrid(X, grid)
@@ -384,6 +400,8 @@ def get_data_logistic(
 
         grid = preprocessing.normalize_grid(
             X_fd.grid_points[0], tau_range[0], tau_range[1])
+
+        X_fd = FDataGrid(X_fd.data_matrix, grid)
 
     # Smooth data
     if initial_smoothing:
@@ -752,7 +770,8 @@ def main():
         params_cv_names = ["p"] + params_cv_names
 
     # MCMC parameters
-    beta_range = (-500, 500)
+    beta_range = (-1000, 1000) if include_p else None
+    sigma2_ub = np.inf
     moves = None
     step_fn = None
     step_kwargs = None
@@ -783,10 +802,15 @@ def main():
     if args.kind == "linear":
         score_column = "MSE"
         all_estimates = ["posterior_mean"] + point_estimates
+        columns_name = [
+            "Estimator",
+            "Mean MSE", "SD MSE",
+            "Mean rMSE", "SD rMSE"
+        ]
     else:
         score_column = "Acc"
         all_estimates = ["posterior_mean", "posterior_vote"] + point_estimates
-    columns_name = ["Estimator", "Mean " + score_column, "SD"]
+        columns_name = ["Estimator", "Mean Acc", "SD Acc"]
 
     ##
     # GET DATASET
@@ -806,6 +830,8 @@ def main():
         kernel_fn = simulation.ornstein_uhlenbeck_kernel
     elif args.kernel == "sqexp":
         kernel_fn = simulation.squared_exponential_kernel
+    elif args.kernel == "bm":
+        kernel_fn = simulation.brownian_kernel
     else:
         kernel_fn = simulation.fractional_brownian_kernel
 
@@ -823,6 +849,18 @@ def main():
             rng=rng
         )
     else:
+        kernel_fn2 = None
+        mean_vector2 = None
+        if args.data == "mixture":
+            kernel_fn = simulation.fractional_brownian_kernel
+            if args.kernel == "homoscedastic":
+                kernel_fn2 = kernel_fn
+                mean_vector2 = np.linspace(
+                    tau_range[0], tau_range[1], args.n_grid)
+            else:  # heteroscedastic
+                kernel_fn2 = ...
+                mean_vector2 = None
+
         X_fd, y, grid = get_data_logistic(
             is_simulated_data,
             model_type,
@@ -833,22 +871,26 @@ def main():
             noise=args.noise,
             initial_smoothing=args.smoothing == "nw",
             tau_range=tau_range,
+            kernel_fn2=kernel_fn2,
+            mean_vector2=mean_vector2,
             rng=rng
         )
-
-    # Set data-dependent parameters
-    sigma2_ub = 10*y.var() if args.kind == "linear" else np.inf
 
     ##
     # RANDOM SPLITS LOOP
     ##
 
-    score_ref_best = defaultdict(lambda: [])
-    score_bayesian_best = defaultdict(lambda: [])
-    score_var_sel_best = defaultdict(lambda: [])
+    score_ref_best = defaultdict(list)
+    score_bayesian_best = defaultdict(list)
+    score_var_sel_best = defaultdict(list)
     score_bayesian_all = []
     score_var_sel_all = []
     exec_times = np.zeros((args.n_reps, 2))  # (splits, (ref, bayesian))
+
+    if args.kind == "linear":
+        rmse_ref_best = defaultdict(list)
+        rmse_bayesian_best = defaultdict(list)
+        rmse_var_sel_best = defaultdict(list)
 
     # Get wrappers for parameter space and bayesian regressor
     theta_space_wrapper = get_theta_space_wrapper(
@@ -935,6 +977,7 @@ def main():
                 ref_models_score = df_ref_split[["Estimator", score_column]]
                 for name, score in ref_models_score.values:
                     score_ref_best[name].append(score)
+                    rmse_ref_best[name].append(score/np.var(y_test))
 
                 exec_times[rep, 0] = time.time() - start
 
@@ -1010,7 +1053,10 @@ def main():
                 y_pred_bayesian = estimator_bayesian.predict(
                     X_test, strategy=strategy)
                 if args.kind == "linear":
-                    score_bayesian = mean_squared_error(y_test, y_pred_bayesian)
+                    score_bayesian = mean_squared_error(
+                        y_test, y_pred_bayesian)
+                    rmse_bayesian_best[strategy].append(
+                        score_bayesian/np.var(y_test))
                 else:
                     score_bayesian = accuracy_score(y_test, y_pred_bayesian)
                 score_bayesian_best[strategy].append(score_bayesian)
@@ -1027,6 +1073,8 @@ def main():
                     estimator_var_sel, est_multiple)
                 if args.kind == "linear":
                     score_var_sel = mean_squared_error(y_test, y_pred_var_sel)
+                    rmse_var_sel_best[strategy].append(
+                        score_var_sel/np.var(y_test))
                 else:
                     score_var_sel = accuracy_score(y_test, y_pred_var_sel)
                 score_var_sel_best[pe].append(score_var_sel)
@@ -1041,24 +1089,44 @@ def main():
     # AVERAGE RESULTS ACROSS SPLITS
     ##
 
-    mean_score_ref = [(k, np.mean(v), np.std(v))
-                      for k, v in score_ref_best.items()]
+    mean_scores = []
 
-    mean_score_bayesian = [(args.method + "_" + k, np.mean(v), np.std(v))
-                           for k, v in score_bayesian_best.items()]
+    if args.kind == "linear":
+        dict_results = [
+            ("", "", score_ref_best, rmse_ref_best),
+            (args.method + "_", "", score_bayesian_best, rmse_bayesian_best),
+            (args.method + "_", "+ridge", score_var_sel_best, rmse_var_sel_best)
+        ]
 
-    var_sel_str = "ridge" if args.kind == "linear" else "logistic"
-    mean_score_var_sel = [
-        (args.method + "_" + k + "+" + var_sel_str, np.mean(v), np.std(v))
-        for k, v in score_var_sel_best.items()]
+        for prefix, suffix, d1, d2 in dict_results:
+            # Average MSE and relative MSE
+            mean_scores.append([
+                (
+                    prefix + k + suffix,
+                    np.mean(d1[k]), np.std(d1[k]),
+                    np.mean(d2[k]), np.std(d2[k])
+                )
+                for k in d1.keys()])
+
+    else:  # logistic
+        # Average accuracy
+        mean_scores.append([
+            (k, np.mean(v), np.std(v))
+            for k, v in score_ref_best.items()])
+        mean_scores.append([
+            (args.method + "_" + k, np.mean(v), np.std(v))
+            for k, v in score_bayesian_best.items()])
+        mean_scores.append([
+            (args.method + "_" + k + "+logistic", np.mean(v), np.std(v))
+            for k, v in score_var_sel_best.items()])
 
     df_metrics_ref = pd.DataFrame(
-        mean_score_ref,
+        mean_scores[0],
         columns=columns_name
     ).sort_values("Mean " + score_column, ascending=args.kind == "linear")
 
     df_metrics_bayesian_var_sel = pd.DataFrame(
-        mean_score_bayesian + mean_score_var_sel,
+        mean_scores[1] + mean_scores[2],
         columns=columns_name
     ).sort_values("Mean " + score_column, ascending=args.kind == "linear")
 
