@@ -21,7 +21,7 @@ from sklearn.base import (BaseEstimator, ClassifierMixin, RegressorMixin,
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.utils.validation import check_is_fitted
 
-from ._autocorr import integrated_time
+from .autocorr import integrated_time
 from .bayesian_model import (PriorType, RandomType, ThetaSpace, generate_pp,
                              log_posterior_linear, log_posterior_logistic,
                              log_prior_linear_logistic, make_model_linear_pymc,
@@ -576,7 +576,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
                     progress=False,
                     store=False
                 ):
-                    state_init = self._relabel_chain(state_init)
+                    state_init = self._relabel_chain(state_init, use_beta=False)
 
                 self._sampler.reset()
                 self._sampler._previous_state = state_init
@@ -598,7 +598,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
                 progress=progress,
                 progress_kwargs=self.progress_kwargs
             )):
-                state = self._relabel_chain(state)
+                state = self._relabel_chain(state, use_beta=False)
                 self._sampler.backend.chain[i, :, :] = state.coords
 
         # Transform back parameters and discard unused ones if applicable
@@ -650,12 +650,14 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         if ts.include_p:
             self._discard_components(trace)
 
-    def _relabel_chain(self, state):
+    def _relabel_chain(self, state, use_beta=True):
         ts = self.theta_space
         _, beta_full, tau_full, _, _ = \
             ts.slice_params(state.coords, clip=False)
 
-        sorted_idx = np.argsort(beta_full, axis=1)
+        arr = beta_full if use_beta else tau_full
+
+        sorted_idx = np.argsort(arr, axis=1)
         state.coords[..., ts.beta_idx] = np.take_along_axis(
             beta_full, sorted_idx, axis=1)
         state.coords[..., ts.tau_idx] = np.take_along_axis(
@@ -771,7 +773,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
 
         init_tr = self.theta_space.forward(init)
 
-        return init_tr if n_samples > 1 else init_tr[0]
+        return init_tr
 
     def _initial_guess_around_value(self, value, n_samples):
         """'value' is in the original space and does not include 'p'."""
@@ -810,7 +812,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         value_jitter = self.theta_space.clip_bounds(value_jitter)
         value_jitter_tr = self.theta_space.forward(value_jitter)
 
-        return value_jitter_tr if n_samples > 1 else value_jitter_tr[0]
+        return value_jitter_tr
 
     def _weighted_initial_guess_around_value(self, value, n_random, n_around):
         if n_random > 0:

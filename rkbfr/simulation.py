@@ -46,6 +46,8 @@ def gp(grid, mean_vector, kernel_fn, n_samples, rng=None):
 
     if rng is None:
         rng = np.random.default_rng()
+    if mean_vector is None:
+        mean_vector = np.zeros(len(grid))
 
     kernel_matrix = cov_matrix(kernel_fn, grid, grid)
 
@@ -72,7 +74,7 @@ def generate_l2_dataset(
     if sigma2 > 0.0:
         y += np.sqrt(sigma2)*rng.standard_normal(size=len(y))
 
-    return X, y
+    return y
 
 
 def generate_rkhs_dataset(
@@ -99,13 +101,13 @@ def generate_rkhs_dataset(
     y = generate_response_linear(
         X, theta_true, theta_space, noise=sigma2 > 0.0, rng=rng)
 
-    return X, y
+    return y
 
 
 def generate_mixture_dataset(
-        grid, kernel_fn, kernel_fn2,
-        n_samples, rng=None, mean_vector=None,
-        mean_vector2=None
+        grid, mean_vector, mean_vector2,
+        kernel_fn, kernel_fn2,
+        n_samples, rng=None,
 ):
     """Generate dataset based on a known distribution on X|Y."""
     if rng is None:

@@ -11,19 +11,19 @@ import emcee
 import numpy as np
 import pandas as pd
 import pymc as pm
+from reference_methods._fpls import FPLSBasis
 from rkbfr import preprocessing, simulation
-from rkbfr._fpls import FPLSBasis
 from rkbfr.bayesian_model import ThetaSpace, probability_to_label
 from rkbfr.mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
                                 BFLogisticPymc)
 from rkbfr.mle import compute_mle
-from rkbfr.sklearn_utils import DataMatrix, PLSRegressionWrapper
-from rkbfr.utils import (bayesian_variable_selection_predict, cv_sk,
-                         linear_regression_comparison_suite,
-                         logistic_regression_comparison_suite)
+from run_utils import (bayesian_variable_selection_predict, cv_sk,
+                       linear_regression_comparison_suite,
+                       logistic_regression_comparison_suite)
 from skfda.datasets import (fetch_cran, fetch_growth, fetch_medflies,
                             fetch_tecator)
 from skfda.exploratory.depth import IntegratedDepth, ModifiedBandDepth
+from skfda.preprocessing.smoothing import BasisSmoother
 from skfda.preprocessing.smoothing.kernel_smoothers import \
     NadarayaWatsonSmoother as NW
 from skfda.representation.basis import BSpline, Fourier
@@ -32,6 +32,7 @@ from sklearn.linear_model import LogisticRegressionCV, RidgeCV
 from sklearn.metrics import accuracy_score, mean_squared_error
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
+from sklearn_utils import DataMatrix, PLSRegressionWrapper
 
 ###################################################################
 # CONFIGURATION
@@ -118,7 +119,7 @@ def get_arg_parser():
         help="number of grid points for functional regressors"
     )
     parser.add_argument(
-        "--smoothing", default="nw", choices=["none", "nw"],
+        "--smoothing", default="nw", choices=["none", "nw", "basis"],
         help="smooth functional data as part of preprocessing"
     )
     parser.add_argument(
@@ -167,7 +168,7 @@ def get_arg_parser():
 
     # Optional arguments for emcee sampler
     parser.add_argument(
-        "--frac-random", type=float, default=0.3,
+        "--frac-random", type=float, default=0.1,
         help="fraction of initial points randomly generated in emcee sampler"
     )
     parser.add_argument(
@@ -204,7 +205,8 @@ def get_arg_parser():
     data_group.add_argument(
         "--kernel",
         help="name of kernel to use in simulations",
-        choices=["ou", "sqexp", "fbm", "bm", "homoscedastic", "heteroscedastic"]
+        choices=["ou", "sqexp", "fbm", "bm",
+                 "gbm", "homoscedastic", "heteroscedastic"]
     )
     data_group.add_argument(
         "--data-name",
@@ -235,12 +237,13 @@ def get_arg_parser():
 
 def get_data_linear(
     is_simulated_data,
+    X_type,
     model_type,
     n_samples=150,
     n_grid=100,
     kernel_fn=None,
     beta_coef=None,
-    initial_smoothing=False,
+    initial_smoothing="none",
     tau_range=(0, 1),
     rng=None
 ):
@@ -249,17 +252,37 @@ def get_data_linear(
 
     if is_simulated_data:
         grid = np.linspace(tau_range[0] + 1./n_grid, tau_range[1], n_grid)
+        mean_vector = None
         alpha0_true = 5.
         sigma2_true = 0.5
 
+        # Generate X
+        if X_type == "gbm":
+            X = np.exp(
+                simulation.gp(
+                    grid,
+                    mean_vector,
+                    simulation.brownian_kernel,
+                    n_samples,
+                    rng
+                ))
+        else:  # GP
+            X = simulation.gp(
+                grid,
+                mean_vector,
+                simulation.brownian_kernel,
+                n_samples,
+                rng
+            )
+
+        # Generate Y
         if model_type == "l2":
             if beta_coef is None:
                 raise ValueError("Must provide a coefficient function.")
 
-            X, y = simulation.generate_gp_l2_dataset(
+            y = simulation.generate_l2_dataset(
+                X,
                 grid,
-                kernel_fn,
-                n_samples,
                 beta_coef,
                 alpha0_true,
                 sigma2_true,
@@ -268,10 +291,10 @@ def get_data_linear(
         elif model_type == "rkhs":
             beta_true = [-5., 1., 10.]
             tau_true = [0.1, 0.4, 0.8]
-            X, y = simulation.generate_gp_rkhs_dataset(
+
+            y = simulation.generate_rkhs_dataset(
+                X,
                 grid,
-                kernel_fn,
-                n_samples,
                 beta_true,
                 tau_true,
                 alpha0_true,
@@ -290,7 +313,7 @@ def get_data_linear(
             data = X_fd.data_matrix[..., 0]
             u, idx = np.unique(data, axis=0, return_index=True)  # Find repeated
             X_fd = FDataGrid(data[idx], X_fd.grid_points[0]).derivative(order=2)
-            y = y[idx, 1]  # Sqrt-Fat level
+            y = y[idx, 1]  # Fat level
         elif model_type == "moisture":
             data = fetch_cran("Moisturespectrum", "fds")["Moisturespectrum"]
             y = fetch_cran("Moisturevalues", "fds")["Moisturevalues"]
@@ -309,8 +332,12 @@ def get_data_linear(
         X_fd = FDataGrid(X_fd.data_matrix, grid)
 
     # Smooth data
-    if initial_smoothing:
-        smoother = NW()
+    if initial_smoothing != "none":
+        if initial_smoothing == "nw":
+            smoother = NW()
+        else:
+            smoother = BasisSmoother(BSpline(n_basis=16))
+
         smoothing_params = np.logspace(-4, 4, 50)
 
         X_fd, _ = preprocessing.smooth_data(
@@ -340,44 +367,40 @@ def get_data_logistic(
         rng = np.random.default_rng()
 
     if is_simulated_data:
-        if kernel_fn is None:
-            raise ValueError("Must provide a kernel function.")
-
         grid = np.linspace(tau_range[0] + 1./n_grid, tau_range[1], n_grid)
         mean_vector = None
         alpha0_true = -0.5
 
         if model_type == "mixture":
-            X, y = simulation.generate_classification_dataset(
-                grid, kernel_fn, kernel_fn2,
+            X, y = simulation.generate_mixture_dataset(
+                grid, mean_vector, mean_vector2,
+                kernel_fn, kernel_fn2,
                 n_samples, rng,
-                mean_vector, mean_vector2)
+            )
 
-        else:
+        else:  # Logistic model (RKHS or L2)
             if model_type == "l2":
                 if beta_coef is None:
                     raise ValueError("Must provide a coefficient function.")
 
-                X, y_lin = simulation.generate_gp_l2_dataset(
+                y_lin = simulation.generate_l2_dataset(
+                    X,
                     grid,
-                    kernel_fn,
-                    n_samples,
                     beta_coef,
                     alpha0_true,
-                    0.0,
+                    sigma2=0.0,
                     rng=rng
                 )
             elif model_type == "rkhs":
                 beta_true = [-5., 1., 10.]
                 tau_true = [0.1, 0.4, 0.8]
-                X, y_lin = simulation.generate_gp_rkhs_dataset(
+                y_lin = simulation.generate_rkhs_dataset(
+                    X,
                     grid,
-                    kernel_fn,
-                    n_samples,
                     beta_true,
                     tau_true,
                     alpha0_true,
-                    0.0,
+                    sigma2=0.0,
                     rng=rng
                 )
             else:
@@ -404,8 +427,12 @@ def get_data_logistic(
         X_fd = FDataGrid(X_fd.data_matrix, grid)
 
     # Smooth data
-    if initial_smoothing:
-        smoother = NW()
+    if initial_smoothing != "none":
+        if initial_smoothing == "nw":
+            smoother = NW()
+        else:
+            smoother = BasisSmoother(BSpline(n_basis=16))
+
         smoothing_params = np.logspace(-4, 4, 50)
 
         X_fd, _ = preprocessing.smooth_data(
@@ -832,34 +859,41 @@ def main():
         kernel_fn = simulation.squared_exponential_kernel
     elif args.kernel == "bm":
         kernel_fn = simulation.brownian_kernel
-    else:
+    elif args.kernel == "fbm":
         kernel_fn = simulation.fractional_brownian_kernel
+    elif args.kernel == "gbm":
+        kernel_fn = None
 
     # Retrieve data
     if args.kind == "linear":
+        X_type = "gbm" if args.kernel == "gbm" else "gp"
         X_fd, y, grid = get_data_linear(
             is_simulated_data,
+            X_type,
             model_type,
             args.n_samples,
             args.n_grid,
             kernel_fn=kernel_fn,
             beta_coef=beta_coef,
-            initial_smoothing=args.smoothing == "nw",
+            initial_smoothing=args.smoothing,
             tau_range=tau_range,
             rng=rng
         )
-    else:
-        kernel_fn2 = None
-        mean_vector2 = None
+    else:  # logistic
         if args.data == "mixture":
-            kernel_fn = simulation.fractional_brownian_kernel
+            kernel_fn = simulation.brownian_kernel
             if args.kernel == "homoscedastic":
                 kernel_fn2 = kernel_fn
                 mean_vector2 = np.linspace(
                     tau_range[0], tau_range[1], args.n_grid)
             else:  # heteroscedastic
-                kernel_fn2 = ...
                 mean_vector2 = None
+
+                def kernel_fn2(s, t):
+                    return simulation.brownian_kernel(s, t, 1.5)
+        else:
+            mean_vector2 = None
+            kernel_fn2 = None
 
         X_fd, y, grid = get_data_logistic(
             is_simulated_data,
@@ -869,7 +903,7 @@ def main():
             kernel_fn=kernel_fn,
             beta_coef=beta_coef,
             noise=args.noise,
-            initial_smoothing=args.smoothing == "nw",
+            initial_smoothing=args.smoothing,
             tau_range=tau_range,
             kernel_fn2=kernel_fn2,
             mean_vector2=mean_vector2,
@@ -1136,10 +1170,21 @@ def main():
 
     # Get filename
     if is_simulated_data:
-        data_name = args.data + "_" + kernel_fn.__name__
+        if args.data == "mixture":
+            data_name = "mixture_" + args.kernel
+        elif args.kernel == "gbm":
+            data_name = "gbm_" + args.data
+        else:
+            data_name = "gp_" + kernel_fn.__name__ + "_" + args.data
     else:
         data_name = args.data_name
-    smoothing = "_smoothing" if args.smoothing == "nw" else ""
+
+    if args.smoothing == "nw":
+        smoothing = "_smoothing_nw"
+    elif args.smoothing == "basis":
+        smoothing = "_smoothing_basis"
+    else:
+        smoothing = ""
 
     if args.kind == "linear":
         prefix_kind = "reg"
@@ -1176,12 +1221,24 @@ def main():
     print(f"Train size: {len(X_train)}")
     if args.smoothing == "nw":
         print("Smoothing: Nadaraya-Watson")
+    elif args.smoothing == "basis":
+        print("Smoothing: BSpline(16)")
     else:
         print("Smoothing: None")
 
     if is_simulated_data:
-        print(f"Model type: {args.data.upper()}")
-        print(f"X ~ GP(0, {kernel_fn.__name__})")
+        if args.data == "mixture":
+            if args.kernel == "homoscedastic":
+                print("Model type: BM(0, 1) + BM(t, 1)")
+            else:
+                print("Model type: BM(0, 1) + BM(0, 1.5)")
+        else:
+            if args.kernel == "gbm":
+                print("X ~ GBM(0, 1)")
+            else:
+                print(f"X ~ GP(0, {kernel_fn.__name__})")
+            print(f"Model type: {args.data.upper()}")
+
     else:
         print(f"Data name: {args.data_name}")
 
