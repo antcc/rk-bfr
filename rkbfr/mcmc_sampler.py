@@ -964,9 +964,9 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
         # Select initial points
 
         if ts.include_p:
-            start = [{'p_cat': i % ts.p_max} for i in range(self.n_walkers)]
+            initvals = [{'p_cat': i % ts.p_max} for i in range(self.n_walkers)]
         else:
-            start = None
+            initvals = None
 
         # Run MCMC procedure
 
@@ -975,8 +975,9 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
                 idata = pm.sample(
                     self.n_iter,
                     cores=self.n_jobs_,
+                    init="jitter+adapt_diag_grad",
                     chains=self.n_walkers,
-                    start=start,
+                    initvals=initvals,
                     tune=self.n_iter_warmup,
                     step=step,
                     random_seed=seed,

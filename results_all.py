@@ -11,24 +11,28 @@ import emcee
 import numpy as np
 import pandas as pd
 import pymc as pm
+from reference_methods._fpls import FPLSBasis
 from rkbfr import preprocessing, simulation
 from rkbfr.bayesian_model import ThetaSpace, probability_to_label
 from rkbfr.mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
                                 BFLogisticPymc)
 from rkbfr.mle import compute_mle
-from run_utils import bayesian_variable_selection_predict
+from run_utils import (bayesian_variable_selection_predict, cv_sk,
+                       linear_regression_comparison_suite,
+                       logistic_regression_comparison_suite)
 from skfda.datasets import (fetch_cran, fetch_growth, fetch_medflies,
                             fetch_phoneme, fetch_tecator)
+from skfda.exploratory.depth import IntegratedDepth, ModifiedBandDepth
 from skfda.preprocessing.smoothing import BasisSmoother
 from skfda.preprocessing.smoothing.kernel_smoothers import \
     NadarayaWatsonSmoother as NW
-from skfda.representation.basis import BSpline
+from skfda.representation.basis import BSpline, Fourier
 from skfda.representation.grid import FDataGrid
 from sklearn.linear_model import LogisticRegressionCV, RidgeCV
 from sklearn.metrics import accuracy_score, mean_squared_error
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn_utils import DataMatrix
+from sklearn_utils import DataMatrix, PLSRegressionWrapper
 
 ###################################################################
 # CONFIGURATION
@@ -44,6 +48,7 @@ pd.set_option("display.precision", 3)
 pd.set_option('display.max_columns', 80)
 
 # Script behavior
+RUN_REF_ALGS = True
 VERBOSE = True
 PRECOMPUTE_MLE = True
 PRINT_TO_FILE = False
@@ -121,7 +126,8 @@ def get_arg_parser():
     )
     parser.add_argument(
         "--standardize", action="store_true",
-        help="whether to consider predictors with unit variance."
+        help="whether to consider predictors and response with "
+             "zero mean and unit variance."
     )
 
     # Optional MCMC arguments
@@ -458,6 +464,82 @@ def get_data_logistic(
 # MODEL FUNCTIONS
 ###################################################################
 
+def get_reference_models_linear(X, y, seed):
+    alphas = np.logspace(-4, 4, 20)
+    n_selected = [5, 10, 15, 20, 25, 50]
+    n_components = [2, 3, 4, 5, 7, 10, 15, 20]
+    n_basis_bsplines = [8, 10, 12, 14, 16]
+    n_basis_fourier = [3, 5, 7, 9, 11]
+
+    basis_bspline = [BSpline(n_basis=p) for p in n_basis_bsplines]
+    basis_fourier = [Fourier(n_basis=p) for p in n_basis_fourier]
+
+    basis_fpls = []
+    for p in n_components:
+        try:
+            basis_fpls.append(FPLSBasis(X, y, n_basis=p))
+        except ValueError:
+            # print(f"Can't create FPLSBasis with n_basis={p}")
+            continue
+
+    params_regularizer = {"reg__alpha": alphas}
+    params_select = {"selector__p": n_selected}
+    params_pls = {"reg__n_components": n_components}
+    params_dim_red = {"dim_red__n_components": n_components}
+    params_basis = {"basis__basis": basis_bspline + basis_fourier}
+    # params_basis_fpca = {"basis__n_basis": n_components}
+    # params_basis_fpls = {"basis__basis": basis_fpls}
+    # params_mrmr = {"var_sel__method": ["MID", "MIQ"],
+    #               "var_sel__n_features_to_select": n_components}
+
+    regressors = linear_regression_comparison_suite(
+        params_regularizer,
+        params_select,
+        params_dim_red,
+        params_basis,
+        params_pls,
+        random_state=seed
+    )
+
+    return regressors
+
+
+def get_reference_models_logistic(X, y, seed):
+    Cs = np.logspace(-4, 4, 20)
+    n_selected = [5, 10, 15, 20, 25, 50]
+    n_components = [2, 3, 4, 5, 7, 10, 15, 20]
+    n_neighbors = [3, 5, 7, 11]
+
+    pls_regressors = [
+        PLSRegressionWrapper(n_components=p) for p in n_components]
+
+    params_clf = {"clf__C": Cs}
+    params_select = {"selector__p": n_selected}
+    params_dim_red = {"dim_red__n_components": n_components}
+    params_var_sel = {"var_sel__n_features_to_select": n_components}
+    params_flr = {"clf__p": n_components}
+    params_knn = {"clf__n_neighbors": n_neighbors,
+                  "clf__weights": ['uniform', 'distance']}
+    params_depth = {"clf__depth_method": [
+        ModifiedBandDepth(), IntegratedDepth()]}
+    # params_mrmr = {"var_sel__method": ["MID", "MIQ"]}
+    params_base_regressors_pls = {"clf__base_regressor": pls_regressors}
+
+    classifiers = logistic_regression_comparison_suite(
+        params_clf,
+        params_base_regressors_pls,
+        params_select,
+        params_dim_red,
+        params_var_sel,
+        params_depth,
+        params_knn,
+        params_flr,
+        random_state=seed,
+    )
+
+    return classifiers
+
+
 def get_theta_space_wrapper(
     grid,
     include_p,
@@ -591,7 +673,9 @@ def main():
     # Main hyperparameters
     mle_method = 'L-BFGS-B'
     mle_strategy = 'global'
-    etas = [10**i for i in range(args.eta_range[0], args.eta_range[1] + 1)]
+    # try η every two points in log-scale
+    etas = [0.0] + \
+        [10**i for i in range(args.eta_range[0], args.eta_range[1] + 2, 2)]
     params = [etas]
     params_names = ["eta"]
     params_symbols = ["η"]
@@ -646,10 +730,27 @@ def main():
             "Mean MSE", "SD MSE",
             "Mean rMSE", "SD rMSE"
         ]
+        columns_name_ref = [
+            "Estimator",
+            "Mean MSE", "SD MSE",
+            "Mean rMSE", "SD rMSE"
+        ]
     else:
         score_column = "Acc"
         all_estimates = ["posterior_mean", "posterior_vote"] + point_estimates
         columns_name = ["Estimator", *params_symbols, "Mean Acc", "SD Acc"]
+        columns_name_ref = [
+            "Estimator",
+            "Mean Acc",
+            "SD Acc"
+        ]
+
+    # Folds for reference methods
+    if args.kind == "linear":
+        cv_folds = KFold(5, shuffle=True, random_state=seed)
+    else:
+        cv_folds = StratifiedKFold(
+            5, shuffle=True, random_state=seed)
 
     ##
     # GET DATASET
@@ -730,14 +831,16 @@ def main():
     # RANDOM SPLITS LOOP
     ##
 
+    score_ref_all = defaultdict(list)
     score_bayesian_all = defaultdict(list)
     score_var_sel_all = defaultdict(list)
 
     if args.kind == "linear":
+        rmse_ref_all = defaultdict(list)
         rmse_bayesian_all = defaultdict(list)
         rmse_var_sel_all = defaultdict(list)
 
-    exec_times = np.zeros(args.n_reps)
+    exec_times = np.zeros((args.n_reps, 2))
 
     # Get wrappers for parameter space and bayesian regressor
     theta_space_wrapper = get_theta_space_wrapper(
@@ -787,6 +890,51 @@ def main():
             # Standardize data
             X_train, X_test = preprocessing.standardize_predictors(
                 X_train, X_test, scale=args.standardize)
+            if args.standardize and args.kind == "linear":
+                y_train, y_test = preprocessing.standardize_response(
+                    y_train, y_test)
+
+            ##
+            # RUN REFERENCE ALGORITHMS
+            ##
+
+            if RUN_REF_ALGS:
+                start = time.time()
+
+                # Get reference models
+                if args.kind == "linear":
+                    est_ref = get_reference_models_linear(
+                        X_train, y_train, seed + rep)
+                else:
+                    est_ref = get_reference_models_logistic(
+                        X_train, y_train, seed + rep)
+
+                if VERBOSE:
+                    print(f"(It. {rep + 1}/{args.n_reps}) "
+                          f"Running {len(est_ref)} reference models...")
+
+                # Fit models (through CV+refitting) and predict on test set
+                df_ref_split, _ = cv_sk(
+                    est_ref,
+                    X_train,
+                    y_train,
+                    X_test,
+                    y_test,
+                    cv_folds,
+                    kind=args.kind,
+                    n_jobs=args.n_cores,
+                    sort_by=0,
+                    verbose=False
+                )
+
+                # Save score of best models
+                ref_models_score = df_ref_split[["Estimator", score_column]]
+                for name, score in ref_models_score.values:
+                    score_ref_all[name].append(score)
+                    if args.kind == "linear":
+                        rmse_ref_all[name].append(score/np.var(y_test))
+
+                exec_times[rep, 0] = time.time() - start
 
             ##
             # RUN BAYESIAN ALGORITHM
@@ -877,7 +1025,7 @@ def main():
                         score = accuracy_score(y_test, y_pred)
                     score_var_sel_all[(pe, *param_values)].append(score)
 
-            exec_times[rep] = time.time() - start
+            exec_times[rep, 1] = time.time() - start
 
     except KeyboardInterrupt:
         print("\n[INFO] Process halted by user. Skipping...")
@@ -890,6 +1038,16 @@ def main():
     mean_scores = []
 
     if args.kind == "linear":
+        # Average MSE and relative MSE
+        d1, d2 = score_ref_all, rmse_ref_all
+        mean_scores.append([
+            (
+                k,
+                np.mean(d1[k]), np.std(d1[k]),
+                np.mean(d2[k]), np.std(d2[k])
+            )
+            for k in d1.keys()])
+
         dict_results = [
             (args.method + "_", "", score_bayesian_all, rmse_bayesian_all),
             (args.method + "_", "+ridge", score_var_sel_all, rmse_var_sel_all)
@@ -909,6 +1067,9 @@ def main():
     else:  # logistic
         # Average accuracy
         mean_scores.append([
+            (k, np.mean(v), np.std(v))
+            for k, v in score_ref_all.items()])
+        mean_scores.append([
             (
                 args.method + "_" + k,
                 *params,
@@ -923,13 +1084,18 @@ def main():
             )
             for (k, *params), v in score_var_sel_all.items()])
 
-    df_metrics_bayesian = pd.DataFrame(
+    df_metrics_ref = pd.DataFrame(
         mean_scores[0],
+        columns=columns_name_ref
+    ).sort_values("Mean " + score_column, ascending=args.kind == "linear")
+
+    df_metrics_bayesian = pd.DataFrame(
+        mean_scores[1],
         columns=columns_name
     ).sort_values("Mean " + score_column, ascending=args.kind == "linear")
 
     df_metrics_var_sel = pd.DataFrame(
-        mean_scores[1],
+        mean_scores[2],
         columns=columns_name
     ).sort_values("Mean " + score_column, ascending=args.kind == "linear")
 
@@ -994,6 +1160,12 @@ def main():
     else:
         print("Smoothing: None")
 
+    if args.standardize:
+        standardize_str = "Standardized predictors"
+        if args.kind == "linear":
+            standardize_str += " and response"
+        print(standardize_str)
+
     if is_simulated_data:
         if args.data == "mixture":
             if args.kernel == "homoscedastic":
@@ -1024,6 +1196,7 @@ def main():
             print("\n-- EMCEE SAMPLER --")
             print(f"N_walkers: {args.n_walkers}")
             print(f"N_iters: {args.n_iters} + {args.n_tune}")
+            print(f"Burn: {args.n_burn}")
             print(f"Frac_random: {args.frac_random}")
             print("Moves:")
             for move, prob in moves:
@@ -1039,13 +1212,23 @@ def main():
 
         # Print results
 
+        if RUN_REF_ALGS:
+            print("\n-- RESULTS REFERENCE METHODS --")
+            print(
+                "Mean split execution time: "
+                f"{exec_times[:rep + 1, 0].mean():.3f}"
+                f"±{exec_times[:rep + 1, 0].std():.3f} s")
+            print("Total splits execution time: "
+                  f"{exec_times[:rep + 1, 0].sum()/60.:.3f} min\n")
+            print(df_metrics_ref.to_string(index=False, col_space=4))
+
         print(f"\n-- RESULTS {args.method.upper()} --")
         print(
             "Mean split execution time: "
-            f"{exec_times[:rep + 1].mean():.3f}"
-            f"±{exec_times[:rep + 1].std():.3f} s")
+            f"{exec_times[:rep + 1, 1].mean():.3f}"
+            f"±{exec_times[:rep + 1, 1].std():.3f} s")
         print("Total splits execution time: "
-              f"{exec_times[:rep + 1].sum()/60.:.3f} min\n")
+              f"{exec_times[:rep + 1, 1].sum()/60.:.3f} min\n")
 
         print("Functional methods:\n")
         print(df_metrics_bayesian.to_string(index=False, col_space=4))

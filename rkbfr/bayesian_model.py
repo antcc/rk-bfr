@@ -755,18 +755,20 @@ def make_model_linear_pymc(
     p_max = theta_space.p_max
 
     with pm.Model() as model:
-        X_pm = pm.Data('X_obs', X)
+        X_pm = pm.MutableData('X_obs', X)
 
         if ts.include_p:
-            p_cat = pm.Categorical('p_cat', p=list(prior_p.values()))
+            p_cat = pm.Categorical(
+                'p_cat',
+                p=list(prior_p.values())
+            )
             p = pm.Deterministic(ts.names[ts.p_idx], p_cat + 1)
         else:
             p = p_max
 
-        alpha0_and_log_sigma = pm.DensityDist(
+        alpha0_and_log_sigma = pm.Flat(
             ts.names[ts.alpha0_idx] + "_and_" + ts.names_ttr[ts.sigma2_idx],
-            logp=lambda x: 0,
-            shape=(2,)
+            shape=2
         )
 
         alpha0 = pm.Deterministic(
@@ -776,7 +778,17 @@ def make_model_linear_pymc(
         sigma = pm.math.exp(log_sigma)
         sigma2 = pm.Deterministic(ts.names[ts.sigma2_idx], sigma**2)
 
-        tau = pm.Uniform(ts.names[ts.tau_idx_grouped], 0.0, 1.0, shape=(p_max,))
+        tau_unordered = pm.Uniform(
+            ts.names[ts.tau_idx_grouped] + "_unordered",
+            0.0,
+            1.0,
+            shape=p_max,
+        )
+
+        tau = pm.Deterministic(
+            ts.names[ts.tau_idx_grouped],
+            at.sort(tau_unordered)
+        )
         tau_red = tau[:p]
 
         idx = np.abs(ts.grid - tau_red[:, np.newaxis]).argmin(1)
@@ -786,19 +798,43 @@ def make_model_linear_pymc(
         G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
         G_tau_reg = G_tau + eta * \
             at.max(at.nlinalg.eigh(G_tau)[0])*at.eye(p)
-        G_log_det = pm.math.logdet(G_tau_reg)
 
-        def beta_lprior(value):
+        def beta_lprior(value, p, log_sigma, sigma2, G_tau_reg):
             b = (value - b0)[:p]
+            G_log_det = pm.math.logdet(G_tau_reg)
 
             return (0.5*G_log_det
                     - p*log_sigma
                     - pm.math.matrix_dot(b.T, G_tau_reg, b)/(2.*g*sigma2))
 
-        beta = pm.DensityDist(
-            ts.names[ts.beta_idx_grouped], logp=beta_lprior, shape=(p_max,))
-        beta_red = beta[:p]
+        beta_unbounded = pm.DensityDist(
+            ts.names[ts.beta_idx_grouped] + "_unbounded",
+            p,
+            log_sigma,
+            sigma2,
+            G_tau_reg,
+            logp=beta_lprior,
+            shape=3
+        )
 
+        # Restrict values of beta
+        if ts.beta_range is not None:
+            beta = pm.Deterministic(
+                ts.names[ts.beta_idx_grouped],
+                pm.math.clip(
+                    beta_unbounded,
+                    ts.beta_range[0],
+                    ts.beta_range[1]
+                )
+            )
+
+        else:
+            beta = pm.Deterministic(
+                ts.names[ts.beta_idx_grouped],
+                beta_unbounded
+            )
+
+        beta_red = beta[:p]
         expected_obs = alpha0 + pm.math.matrix_dot(X_tau, beta_red)
 
         y_obs = pm.Normal('y_obs', mu=expected_obs, sigma=sigma, observed=y)
@@ -821,18 +857,20 @@ def make_model_logistic_pymc(
     p_max = theta_space.p_max
 
     with pm.Model() as model:
-        X_pm = pm.Data('X_obs', X)
+        X_pm = pm.MutableData('X_obs', X)
 
         if ts.include_p:
-            p_cat = pm.Categorical('p_cat', p=list(prior_p.values()))
+            p_cat = pm.Categorical(
+                'p_cat',
+                p=list(prior_p.values())
+            )
             p = pm.Deterministic(ts.names[ts.p_idx], p_cat + 1)
         else:
             p = p_max
 
-        alpha0_and_log_sigma = pm.DensityDist(
+        alpha0_and_log_sigma = pm.Flat(
             ts.names[ts.alpha0_idx] + "_and_" + ts.names_ttr[ts.sigma2_idx],
-            logp=lambda x: 0,
-            shape=(2,)
+            shape=2
         )
 
         alpha0 = pm.Deterministic(
@@ -842,8 +880,17 @@ def make_model_logistic_pymc(
         sigma = pm.math.exp(log_sigma)
         sigma2 = pm.Deterministic(ts.names[ts.sigma2_idx], sigma**2)
 
-        tau = pm.Uniform(
-            ts.names[ts.tau_idx_grouped], 0.0, 1.0, shape=(p_max,))
+        tau_unordered = pm.Uniform(
+            ts.names[ts.tau_idx_grouped] + "_unordered",
+            0.0,
+            1.0,
+            shape=p_max,
+        )
+
+        tau = pm.Deterministic(
+            ts.names[ts.tau_idx_grouped],
+            at.sort(tau_unordered)
+        )
         tau_red = tau[:p]
 
         idx = np.abs(ts.grid - tau_red[:, np.newaxis]).argmin(1)
@@ -853,17 +900,42 @@ def make_model_logistic_pymc(
         G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
         G_tau_reg = G_tau + eta * \
             at.max(at.nlinalg.eigh(G_tau)[0])*at.eye(p)
-        G_log_det = pm.math.logdet(G_tau_reg)
 
-        def beta_lprior(value):
+        def beta_lprior(value, p, log_sigma, sigma2, G_tau_reg):
             b = (value - b0)[:p]
+            G_log_det = pm.math.logdet(G_tau_reg)
 
             return (0.5*G_log_det
                     - p*log_sigma
                     - pm.math.matrix_dot(b.T, G_tau_reg, b)/(2.*g*sigma2))
 
-        beta = pm.DensityDist(
-            ts.names[ts.beta_idx_grouped], logp=beta_lprior, shape=(p_max,))
+        beta_unbounded = pm.DensityDist(
+            ts.names[ts.beta_idx_grouped] + "_unbounded",
+            p,
+            log_sigma,
+            sigma2,
+            G_tau_reg,
+            logp=beta_lprior,
+            shape=3
+        )
+
+        # Restrict values of beta
+        if ts.beta_range is not None:
+            beta = pm.Deterministic(
+                ts.names[ts.beta_idx_grouped],
+                pm.math.clip(
+                    beta_unbounded,
+                    ts.beta_range[0],
+                    ts.beta_range[1]
+                )
+            )
+
+        else:
+            beta = pm.Deterministic(
+                ts.names[ts.beta_idx_grouped],
+                beta_unbounded
+            )
+
         beta_red = beta[:p]
 
         px = pm.Deterministic(

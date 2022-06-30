@@ -132,7 +132,8 @@ def get_arg_parser():
     )
     parser.add_argument(
         "--standardize", action="store_true",
-        help="whether to consider predictors with unit variance."
+        help="whether to consider predictors and response with "
+             "zero mean and unit variance."
     )
 
     # Optional MCMC arguments
@@ -804,7 +805,9 @@ def main():
     # Main hyperparameters
     mle_method = 'L-BFGS-B'
     mle_strategy = 'global'
-    etas = [10**i for i in range(args.eta_range[0], args.eta_range[1] + 1)]
+    # try η every two points in log-scale
+    etas = [0.0] + \
+        [10**i for i in range(args.eta_range[0], args.eta_range[1] + 2, 2)]
     params_cv = [etas]
     params_cv_names = ["eta"]
 
@@ -996,9 +999,12 @@ def main():
                     X_fd, y, train_size=args.train_size,
                     stratify=y, random_state=seed + rep)
 
-            # Standardize data
+            # Standardize data (always center regressors)
             X_train, X_test = preprocessing.standardize_predictors(
                 X_train, X_test, scale=args.standardize)
+            if args.standardize and args.kind == "linear":
+                y_train, y_test = preprocessing.standardize_response(
+                    y_train, y_test)
 
             ##
             # RUN REFERENCE ALGORITHMS
@@ -1253,6 +1259,12 @@ def main():
     else:
         print("Smoothing: None")
 
+    if args.standardize:
+        standardize_str = "Standardized predictors"
+        if args.kind == "linear":
+            standardize_str += " and response"
+        print(standardize_str)
+
     if is_simulated_data:
         if args.data == "mixture":
             if args.kernel == "homoscedastic":
@@ -1283,6 +1295,7 @@ def main():
             print("\n-- EMCEE SAMPLER --")
             print(f"N_walkers: {args.n_walkers}")
             print(f"N_iters: {args.n_iters} + {args.n_tune}")
+            print(f"Burn: {args.n_burn}")
             print(f"Frac_random: {args.frac_random}")
             print("Moves:")
             for move, prob in moves:
@@ -1299,7 +1312,7 @@ def main():
         # Print results
 
         if RUN_REF_ALGS:
-            print("\n-- RESULTS REFERENCE ALGORITHMS --")
+            print("\n-- RESULTS REFERENCE METHODS --")
             print(
                 "Mean split execution time: "
                 f"{exec_times[:rep + 1, 0].mean():.3f}"
