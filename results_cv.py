@@ -1225,6 +1225,7 @@ def main():
     filename = (prefix_kind + "_" + args.method + "_"
                 + (args.moves if args.method == "emcee" else args.step)
                 + "_" + data_name + "_" + str(len(X_fd)) + smoothing
+                + ("_std" if args.standardize else "")
                 + ("_p_free" if include_p else "")
                 + "_nw_" + str(args.n_walkers) + "_ni_" + str(args.n_iters)
                 + "_seed_" + str(seed))
