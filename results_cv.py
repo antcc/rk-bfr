@@ -805,9 +805,7 @@ def main():
     # Main hyperparameters
     mle_method = 'L-BFGS-B'
     mle_strategy = 'global'
-    # try η every two points in log-scale
-    etas = [0.0] + \
-        [10**i for i in range(args.eta_range[0], args.eta_range[1] + 2, 2)]
+    etas = [10**i for i in range(args.eta_range[0], args.eta_range[1] + 1)]
     params_cv = [etas]
     params_cv_names = ["eta"]
 
