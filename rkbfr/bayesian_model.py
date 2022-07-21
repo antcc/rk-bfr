@@ -550,9 +550,13 @@ def log_prior_linear_logistic(
     G_tau_reg = G_tau + eta * \
         np.max(np.linalg.eigvalsh(G_tau))*np.identity(p)
 
+    # Compute sigma2 factor
+    # (currently we only allow for LogSq transformation)
+    sigma2_factor = 2 if theta_space.sigma2_ttr.name == "Identity" else 0
+
     # Compute log-prior
     log_prior = (0.5*np.linalg.slogdet(G_tau_reg)[1]
-                 - p*log_sigma
+                 - (p + sigma2_factor)*log_sigma
                  - b.T@G_tau_reg@b/(2*g*sigma2))
 
     if theta_space.include_p:

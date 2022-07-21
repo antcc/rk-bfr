@@ -43,15 +43,17 @@ def linear_regression_metrics(
     sort_by=-2,
 ):
     if df is None:
-        results_columns = ["Estimator", "Features", "MSE", r"$R^2$"]
+        results_columns = ["Estimator", "Features", "RMSE", "rRMSE", r"$R^2$"]
         df = pd.DataFrame(columns=results_columns)
 
     r2 = r2_score(y_true, y_pred)
-    mse = mean_squared_error(y_true, y_pred)
+    rmse = mean_squared_error(y_true, y_pred, squared=False)
+    rrmse = rmse/np.std(y_true)
     df.loc[len(df)] = [
         predictor_name,
         n_features,
-        mse,
+        rmse,
+        rrmse,
         r2
     ]
 

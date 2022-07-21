@@ -570,18 +570,15 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
 
             # Warmup iterations
             if self.n_iter_warmup > 0:
-                for state_init in self._sampler.sample(
+                state_init_sampler = self._sampler.run_mcmc(
                     initial_state,
-                    iterations=self.n_iter_warmup,
+                    self.n_iter_warmup,
                     progress=False,
-                    store=False
-                ):
-                    state_init = self._relabel_chain(state_init, use_beta=False)
+                    store=False)
 
                 self._sampler.reset()
-                self._sampler._previous_state = state_init
             else:
-                state_init = initial_state
+                state_init_sampler = initial_state
 
             if self.verbose > 0:
                 progress = 'notebook' if self.progress_notebook else True
@@ -592,14 +589,14 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
                 progress = False
 
             # MCMC run
-            for i, state in enumerate(self._sampler.sample(
-                state_init,
-                iterations=self.n_iter,
+            self._sampler.run_mcmc(
+                state_init_sampler,
+                self.n_iter,
                 progress=progress,
-                progress_kwargs=self.progress_kwargs
-            )):
-                state = self._relabel_chain(state, use_beta=False)
-                self._sampler.backend.chain[i, :, :] = state.coords
+                progress_kwargs=self.progress_kwargs)
+
+        # Relabel elements to correct label switching
+        self._relabel_trace(use_beta=False)
 
         # Transform back parameters and discard unused ones if applicable
 
@@ -650,20 +647,17 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         if ts.include_p:
             self._discard_components(trace)
 
-    def _relabel_chain(self, state, use_beta=True):
+    def _relabel_trace(self, use_beta=True):
         ts = self.theta_space
-        _, beta_full, tau_full, _, _ = \
-            ts.slice_params(state.coords, clip=False)
-
+        chain = self._sampler.backend.chain
+        _, beta_full, tau_full, _, _ = ts.slice_params(chain, clip=False)
         arr = beta_full if use_beta else tau_full
 
-        sorted_idx = np.argsort(arr, axis=1)
-        state.coords[..., ts.beta_idx] = np.take_along_axis(
-            beta_full, sorted_idx, axis=1)
-        state.coords[..., ts.tau_idx] = np.take_along_axis(
-            tau_full, sorted_idx, axis=1)
-
-        return state
+        sorted_idx = np.argsort(arr, axis=-1)
+        chain[..., ts.beta_idx] = np.take_along_axis(
+            beta_full, sorted_idx, axis=-1)
+        chain[..., ts.tau_idx] = np.take_along_axis(
+            tau_full, sorted_idx, axis=-1)
 
     def _compute_burn(self):
         if self.burn is None:

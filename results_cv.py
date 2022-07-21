@@ -742,7 +742,8 @@ def bayesian_cv(
                 y_pred_cv = est_bayesian.predict(
                     X_test_cv, strategy=strategy)
                 if kind == "linear":
-                    score = -mean_squared_error(y_test_cv, y_pred_cv)
+                    score = -mean_squared_error(
+                        y_test_cv, y_pred_cv, squared=False)
                 else:
                     score = accuracy_score(y_test_cv, y_pred_cv)
                 score_bayesian_cv[strategy][(i, *idx)] = score
@@ -753,7 +754,8 @@ def bayesian_cv(
                     X_train_cv, y_train_cv, X_test_cv,
                     pe, est_bayesian, est_multiple)
                 if kind == "linear":
-                    score = -mean_squared_error(y_test_cv, y_pred_cv)
+                    score = -mean_squared_error(
+                        y_test_cv, y_pred_cv, squared=False)
                 else:
                     score = accuracy_score(y_test_cv, y_pred_cv)
                 score_var_sel_cv[pe][(i, *idx)] = score
@@ -850,12 +852,12 @@ def main():
         theta_names = ["p"] + theta_names
     point_estimates = ["mean", "median", "mode"]
     if args.kind == "linear":
-        score_column = "MSE"
+        score_column = "RMSE"
         all_estimates = ["posterior_mean"] + point_estimates
         columns_name = [
             "Estimator",
-            "Mean MSE", "SD MSE",
-            "Mean rMSE", "SD rMSE"
+            "Mean RMSE", "SD RMSE",
+            "Mean rRMSE", "SD rRMSE"
         ]
     else:
         score_column = "Acc"
@@ -917,7 +919,7 @@ def main():
                 mean_vector2 = None
 
                 def kernel_fn2(s, t):
-                    return simulation.brownian_kernel(s, t, 1.5)
+                    return simulation.brownian_kernel(s, t, 2.0)
         else:
             mean_vector2 = None
             kernel_fn2 = None
@@ -949,9 +951,9 @@ def main():
     exec_times = np.zeros((args.n_reps, 2))  # (splits, (ref, bayesian))
 
     if args.kind == "linear":
-        rmse_ref_best = defaultdict(list)
-        rmse_bayesian_best = defaultdict(list)
-        rmse_var_sel_best = defaultdict(list)
+        rrmse_ref_best = defaultdict(list)
+        rrmse_bayesian_best = defaultdict(list)
+        rrmse_var_sel_best = defaultdict(list)
 
     # Get wrappers for parameter space and bayesian regressor
     theta_space_wrapper = get_theta_space_wrapper(
@@ -1042,7 +1044,7 @@ def main():
                 for name, score in ref_models_score.values:
                     score_ref_best[name].append(score)
                     if args.kind == "linear":
-                        rmse_ref_best[name].append(score/np.var(y_test))
+                        rrmse_ref_best[name].append(score/np.std(y_test))
 
                 exec_times[rep, 0] = time.time() - start
 
@@ -1119,9 +1121,9 @@ def main():
                     X_test, strategy=strategy)
                 if args.kind == "linear":
                     score_bayesian = mean_squared_error(
-                        y_test, y_pred_bayesian)
-                    rmse_bayesian_best[strategy].append(
-                        score_bayesian/np.var(y_test))
+                        y_test, y_pred_bayesian, squared=False)
+                    rrmse_bayesian_best[strategy].append(
+                        score_bayesian/np.std(y_test))
                 else:
                     score_bayesian = accuracy_score(y_test, y_pred_bayesian)
                 score_bayesian_best[strategy].append(score_bayesian)
@@ -1137,9 +1139,10 @@ def main():
                     X_train, y_train, X_test, pe,
                     estimator_var_sel, est_multiple)
                 if args.kind == "linear":
-                    score_var_sel = mean_squared_error(y_test, y_pred_var_sel)
-                    rmse_var_sel_best[pe].append(
-                        score_var_sel/np.var(y_test))
+                    score_var_sel = mean_squared_error(
+                        y_test, y_pred_var_sel, squared=False)
+                    rrmse_var_sel_best[pe].append(
+                        score_var_sel/np.std(y_test))
                 else:
                     score_var_sel = accuracy_score(y_test, y_pred_var_sel)
                 score_var_sel_best[pe].append(score_var_sel)
@@ -1158,13 +1161,13 @@ def main():
 
     if args.kind == "linear":
         dict_results = [
-            ("", "", score_ref_best, rmse_ref_best),
-            (args.method + "_", "", score_bayesian_best, rmse_bayesian_best),
-            (args.method + "_", "+ridge", score_var_sel_best, rmse_var_sel_best)
+            ("", "", score_ref_best, rrmse_ref_best),
+            (args.method + "_", "", score_bayesian_best, rrmse_bayesian_best),
+            (args.method + "_", "+ridge", score_var_sel_best, rrmse_var_sel_best)
         ]
 
         for prefix, suffix, d1, d2 in dict_results:
-            # Average MSE and relative MSE
+            # Average RMSE and relative RMSE
             mean_scores.append([
                 (
                     prefix + k + suffix,
@@ -1269,7 +1272,7 @@ def main():
             if args.kernel == "homoscedastic":
                 print("Model type: BM(0, 1) + BM(m(t), 1)")
             else:
-                print("Model type: BM(0, 1) + BM(0, 1.5)")
+                print("Model type: BM(0, 1) + BM(0, 2)")
         else:
             if args.kernel == "gbm":
                 print("X ~ GBM(0, 1)")

@@ -720,18 +720,18 @@ def main():
         theta_names = ["p"] + theta_names
     point_estimates = ["mean", "median", "mode"]
     if args.kind == "linear":
-        score_column = "MSE"
+        score_column = "RMSE"
         all_estimates = ["posterior_mean"] + point_estimates
         columns_name = [
             "Estimator",
             *params_symbols,
-            "Mean MSE", "SD MSE",
-            "Mean rMSE", "SD rMSE"
+            "Mean RMSE", "SD RMSE",
+            "Mean rRMSE", "SD rRMSE"
         ]
         columns_name_ref = [
             "Estimator",
-            "Mean MSE", "SD MSE",
-            "Mean rMSE", "SD rMSE"
+            "Mean RMSE", "SD RMSE",
+            "Mean rRMSE", "SD rRMSE"
         ]
     else:
         score_column = "Acc"
@@ -805,7 +805,7 @@ def main():
                 mean_vector2 = None
 
                 def kernel_fn2(s, t):
-                    return simulation.brownian_kernel(s, t, 1.5)
+                    return simulation.brownian_kernel(s, t, 2.0)
         else:
             mean_vector2 = None
             kernel_fn2 = None
@@ -834,9 +834,9 @@ def main():
     score_var_sel_all = defaultdict(list)
 
     if args.kind == "linear":
-        rmse_ref_all = defaultdict(list)
-        rmse_bayesian_all = defaultdict(list)
-        rmse_var_sel_all = defaultdict(list)
+        rrmse_ref_all = defaultdict(list)
+        rrmse_bayesian_all = defaultdict(list)
+        rrmse_var_sel_all = defaultdict(list)
 
     exec_times = np.zeros((args.n_reps, 2))
 
@@ -930,7 +930,7 @@ def main():
                 for name, score in ref_models_score.values:
                     score_ref_all[name].append(score)
                     if args.kind == "linear":
-                        rmse_ref_all[name].append(score/np.var(y_test))
+                        rrmse_ref_all[name].append(score/np.std(y_test))
 
                 exec_times[rep, 0] = time.time() - start
 
@@ -1003,9 +1003,10 @@ def main():
                     y_pred = estimator.predict(
                         X_test, strategy=strategy)
                     if args.kind == "linear":
-                        score = mean_squared_error(y_test, y_pred)
-                        rmse_bayesian_all[(strategy, *param_values)].append(
-                            score/np.var(y_test))
+                        score = mean_squared_error(
+                            y_test, y_pred, squared=False)
+                        rrmse_bayesian_all[(strategy, *param_values)].append(
+                            score/np.std(y_test))
                     else:
                         score = accuracy_score(y_test, y_pred)
                     score_bayesian_all[(strategy, *param_values)].append(score)
@@ -1016,9 +1017,10 @@ def main():
                         X_train, y_train, X_test,
                         pe, estimator, est_multiple)
                     if args.kind == "linear":
-                        score = mean_squared_error(y_test, y_pred)
-                        rmse_var_sel_all[(pe, *param_values)].append(
-                            score/np.var(y_test))
+                        score = mean_squared_error(
+                            y_test, y_pred, squared=False)
+                        rrmse_var_sel_all[(pe, *param_values)].append(
+                            score/np.std(y_test))
                     else:
                         score = accuracy_score(y_test, y_pred)
                     score_var_sel_all[(pe, *param_values)].append(score)
@@ -1036,8 +1038,8 @@ def main():
     mean_scores = []
 
     if args.kind == "linear":
-        # Average MSE and relative MSE
-        d1, d2 = score_ref_all, rmse_ref_all
+        # Average RMSE and relative RMSE
+        d1, d2 = score_ref_all, rrmse_ref_all
         mean_scores.append([
             (
                 k,
@@ -1047,12 +1049,12 @@ def main():
             for k in d1.keys()])
 
         dict_results = [
-            (args.method + "_", "", score_bayesian_all, rmse_bayesian_all),
-            (args.method + "_", "+ridge", score_var_sel_all, rmse_var_sel_all)
+            (args.method + "_", "", score_bayesian_all, rrmse_bayesian_all),
+            (args.method + "_", "+ridge", score_var_sel_all, rrmse_var_sel_all)
         ]
 
         for prefix, suffix, d1, d2 in dict_results:
-            # Average MSE and relative MSE
+            # Average RMSE and relative RMSE
             mean_scores.append([
                 (
                     prefix + k + suffix,
@@ -1170,7 +1172,7 @@ def main():
             if args.kernel == "homoscedastic":
                 print("Model type: BM(0, 1) + BM(m(t), 1)")
             else:
-                print("Model type: BM(0, 1) + BM(0, 1.5)")
+                print("Model type: BM(0, 1) + BM(0, 2)")
         else:
             if args.kernel == "gbm":
                 print("X ~ GBM(0, 1)")
