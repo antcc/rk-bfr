@@ -48,7 +48,7 @@ pd.set_option("display.precision", 3)
 pd.set_option('display.max_columns', 80)
 
 # Script behavior
-RUN_REF_ALGS = True
+RUN_REF_ALGS = False
 VERBOSE = True
 PRECOMPUTE_MLE = True
 PRINT_TO_FILE = False
@@ -576,6 +576,7 @@ def get_mle_wrapper(method, strategy, kind, n_reps, n_jobs, rng):
 def get_bayesian_model_wrapper(
     args,
     prior_p,
+    relabel_strategy,
     rng,
     moves=None,
     step_fn=None,
@@ -586,6 +587,7 @@ def get_bayesian_model_wrapper(
         "g": args.g,
         "prior_p": prior_p,
         "n_iter_warmup": args.n_tune,
+        "relabel_strategy": relabel_strategy,
         "n_reps_mle": args.n_reps_mle,
         "n_jobs": args.n_cores,
         "verbose": args.verbose,
@@ -676,7 +678,7 @@ def main():
     etas = [10**i for i in range(args.eta_range[0], args.eta_range[1] + 1)]
     params = [etas]
     params_names = ["eta"]
-    params_symbols = ["η"]
+    params_symbols = ["p", "η"]
 
     if include_p:
         prior_p = dict(enumerate(args.p_prior, start=1))
@@ -687,11 +689,11 @@ def main():
         p_max = None
         params = [ps] + params
         params_names = ["p"] + params_names
-        params_symbols = ["p"] + params_symbols
 
     # MCMC parameters
     beta_range = (-1000, 1000) if include_p else None
     sigma2_ub = np.inf
+    relabel_strategy = 'auto'
     moves = None
     step_fn = None
     step_kwargs = None
@@ -850,7 +852,7 @@ def main():
     else:
         mle_wrapper = None
     bayesian_model_wrapper = get_bayesian_model_wrapper(
-        args, prior_p, rng, moves, step_fn, step_kwargs)
+        args, prior_p, relabel_strategy, rng, moves, step_fn, step_kwargs)
 
     # Multiple-regression estimator for variable selection algorithm
     if args.kind == "linear":
@@ -965,9 +967,7 @@ def main():
                 if include_p:
                     param_without_p = param
                     param_names_without_p = params_names
-                    param_values = [p_max, *param]
                 else:
-                    param_values = param
                     p = param[0]
                     param_without_p = param[1:]
                     param_names_without_p = params_names[1:]
@@ -1005,6 +1005,10 @@ def main():
                     if args.kind == "linear":
                         score = mean_squared_error(
                             y_test, y_pred, squared=False)
+                        param_values = [
+                            estimator.n_components(strategy),
+                            *param_without_p
+                        ]
                         rrmse_bayesian_all[(strategy, *param_values)].append(
                             score/np.std(y_test))
                     else:
@@ -1019,6 +1023,10 @@ def main():
                     if args.kind == "linear":
                         score = mean_squared_error(
                             y_test, y_pred, squared=False)
+                        param_values = [
+                            estimator.n_components(pe),
+                            *param_without_p
+                        ]
                         rrmse_var_sel_all[(pe, *param_values)].append(
                             score/np.std(y_test))
                     else:

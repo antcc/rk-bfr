@@ -51,7 +51,7 @@ pd.set_option('display.max_columns', 80)
 RUN_REF_ALGS = True
 VERBOSE = True
 PRECOMPUTE_MLE = True
-PRINT_TO_FILE = False
+PRINT_TO_FILE = True
 SAVE_RESULTS = True
 PRINT_PATH = "results/"
 SAVE_PATH = PRINT_PATH + "out/"
@@ -582,6 +582,7 @@ def get_mle_wrapper(method, strategy, kind, n_reps, n_jobs, rng):
 def get_bayesian_model_wrapper(
     args,
     prior_p,
+    relabel_strategy,
     rng,
     moves=None,
     step_fn=None,
@@ -591,6 +592,7 @@ def get_bayesian_model_wrapper(
         "b0": 'mle',
         "g": args.g,
         "prior_p": prior_p,
+        "relabel_strategy": relabel_strategy,
         "n_iter_warmup": args.n_tune,
         "n_reps_mle": args.n_reps_mle,
         "n_jobs": args.n_cores,
@@ -677,6 +679,8 @@ def bayesian_cv(
         lambda: np.zeros((cv_folds.n_splits, *params_cv_shape)))
     score_var_sel_cv = defaultdict(
         lambda: np.zeros((cv_folds.n_splits, *params_cv_shape)))
+    n_components_cv = defaultdict(
+        lambda: np.zeros((cv_folds.n_splits, *params_cv_shape)))
 
     # For each combination of [p, eta], save the corresponding estimator
     est_cv = np.empty(params_cv_shape, dtype=object)
@@ -747,6 +751,9 @@ def bayesian_cv(
                 else:
                     score = accuracy_score(y_test_cv, y_pred_cv)
                 score_bayesian_cv[strategy][(i, *idx)] = score
+                if include_p:
+                    n_components_cv[strategy + "_n_components"][(i, *idx)] = \
+                        est_bayesian.n_components(strategy)
 
             # Variable selection: compute score on test_cv
             for pe in point_estimates:
@@ -760,7 +767,7 @@ def bayesian_cv(
                     score = accuracy_score(y_test_cv, y_pred_cv)
                 score_var_sel_cv[pe][(i, *idx)] = score
 
-    return score_bayesian_cv, score_var_sel_cv, est_cv
+    return score_bayesian_cv, score_var_sel_cv, est_cv, n_components_cv
 
 
 def find_best_estimator_cv(mean_score_cv, est_cv):
@@ -824,6 +831,7 @@ def main():
     # MCMC parameters
     beta_range = (-1000, 1000) if include_p else None
     sigma2_ub = np.inf
+    relabel_strategy = 'auto'
     moves = None
     step_fn = None
     step_kwargs = None
@@ -946,6 +954,7 @@ def main():
     score_ref_best = defaultdict(list)
     score_bayesian_best = defaultdict(list)
     score_var_sel_best = defaultdict(list)
+    score_ref_all = []
     score_bayesian_all = []
     score_var_sel_all = []
     exec_times = np.zeros((args.n_reps, 2))  # (splits, (ref, bayesian))
@@ -965,7 +974,7 @@ def main():
     else:
         mle_wrapper = None
     bayesian_model_wrapper = get_bayesian_model_wrapper(
-        args, prior_p, rng, moves, step_fn, step_kwargs)
+        args, prior_p, relabel_strategy, rng, moves, step_fn, step_kwargs)
 
     # Multiple-regression estimator for variable selection algorithm
     if args.kind == "linear":
@@ -1026,7 +1035,7 @@ def main():
                           f"Running {len(est_ref)} reference models...")
 
                 # Fit models (through CV+refitting) and predict on test set
-                df_ref_split, _ = cv_sk(
+                df_ref_split, est_cv = cv_sk(
                     est_ref,
                     X_train,
                     y_train,
@@ -1038,6 +1047,9 @@ def main():
                     sort_by=0,
                     verbose=False
                 )
+
+                # Save CV scores
+                score_ref_all.append(est_cv.cv_results_)
 
                 # Save score of best models
                 ref_models_score = df_ref_split[["Estimator", score_column]]
@@ -1054,38 +1066,54 @@ def main():
 
             start = time.time()
 
-            # Compute number of models
+            # Compute number of models and parameter dictionary
             params_cv_shape = tuple([len(param) for param in params_cv])
             total_models = np.prod([cv_folds.n_splits, *params_cv_shape])
+            params_dict_cv = {
+                name: values
+                for name, values in zip(params_cv_names, params_cv)}
 
             if VERBOSE:
                 print(f"(It. {rep + 1}/{args.n_reps}) Running {total_models} "
                       f"bayesian RKHS {args.kind} models...")
 
             # Perform K-fold cross validation on training set
-            score_bayesian_cv, score_var_sel_cv, est_cv = bayesian_cv(
-                X_train,
-                y_train,
-                cv_folds,
-                params_cv,
-                params_cv_names,
-                params_cv_shape,
-                theta_space_wrapper,
-                mle_wrapper,
-                bayesian_model_wrapper,
-                include_p,
-                p_max,
-                all_estimates,
-                point_estimates,
-                args.kind,
-                est_multiple,
-                precompute_mle=PRECOMPUTE_MLE,
-                verbose=VERBOSE
-            )
+            score_bayesian_cv, score_var_sel_cv, est_cv, n_components_cv = \
+                bayesian_cv(
+                    X_train,
+                    y_train,
+                    cv_folds,
+                    params_cv,
+                    params_cv_names,
+                    params_cv_shape,
+                    theta_space_wrapper,
+                    mle_wrapper,
+                    bayesian_model_wrapper,
+                    include_p,
+                    p_max,
+                    all_estimates,
+                    point_estimates,
+                    args.kind,
+                    est_multiple,
+                    precompute_mle=PRECOMPUTE_MLE,
+                    verbose=VERBOSE
+                )
+
+            bayesian_cv_results = {
+                **dict(score_bayesian_cv),
+                **params_dict_cv,
+                **n_components_cv
+            }
+
+            var_sel_cv_results = {
+                **dict(score_var_sel_cv),
+                **params_dict_cv,
+                **n_components_cv
+            }
 
             # Save CV results
-            score_bayesian_all.append(dict(score_bayesian_cv))
-            score_var_sel_all.append(dict(score_var_sel_cv))
+            score_bayesian_all.append(bayesian_cv_results)
+            score_var_sel_all.append(var_sel_cv_results)
 
             # Compute mean score across folds
             mean_score_bayesian_cv = {
@@ -1353,6 +1381,7 @@ def main():
             # Save the CV results to disk
             np.savez(
                 SAVE_PATH + filename + ".npz",
+                score_ref_all=score_ref_all,
                 score_bayesian_all=score_bayesian_all,
                 score_var_sel_all=score_var_sel_all,
             )

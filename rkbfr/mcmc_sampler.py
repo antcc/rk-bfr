@@ -13,6 +13,8 @@ import emcee
 import numpy as np
 import pymc as pm
 from pymc.step_methods.arraystep import BlockedStep
+from scipy.spatial.distance import pdist
+from scipy.stats import norm
 from skfda.representation import FData
 from skfda.representation.basis import FDataBasis
 from skfda.representation.grid import FDataGrid
@@ -29,7 +31,7 @@ from .bayesian_model import (PriorType, RandomType, ThetaSpace, generate_pp,
                              point_predict)
 from .mle import compute_mle
 from .utils import (HandleLogger, apply_threshold, check_random_state,
-                    fdata_to_numpy, mode_fn)
+                    fdata_to_numpy, mode_fn, relabel_sample)
 
 DataType = Union[
     FData,
@@ -439,6 +441,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         n_iter_warmup: int = 100,
         initial_state: Union[str, np.ndarray] = 'mle',
         frac_random: float = 0.3,
+        relabel_strategy: str = 'auto',
         moves: Optional[Sequence[emcee.moves.Move]] = None,
         compute_pp: bool = False,
         compute_ll: bool = False,
@@ -469,6 +472,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         self.n_iter_warmup = n_iter_warmup
         self.initial_state = initial_state
         self.frac_random = frac_random
+        self.relabel_strategy = relabel_strategy
         self.moves = moves
         self.compute_pp = compute_pp
         self.compute_ll = compute_ll
@@ -595,9 +599,6 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
                 progress=progress,
                 progress_kwargs=self.progress_kwargs)
 
-        # Relabel elements to correct label switching
-        self._relabel_trace(use_beta=False)
-
         # Transform back parameters and discard unused ones if applicable
 
         self._transform_trace()
@@ -605,6 +606,10 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         # Calculate burn-in
 
         self.burn_ = self._compute_burn()
+
+        # Relabel elements to correct label switching
+
+        self._relabel_trace()
 
         # Get data (after burn-in and thinning)
 
@@ -647,17 +652,46 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         if ts.include_p:
             self._discard_components(trace)
 
-    def _relabel_trace(self, use_beta=True):
-        ts = self.theta_space
-        chain = self._sampler.backend.chain
-        _, beta_full, tau_full, _, _ = ts.slice_params(chain, clip=False)
-        arr = beta_full if use_beta else tau_full
+    def _relabel_trace(self):
+        chain = self._sampler.backend.chain[self.burn_:, :, :]
 
-        sorted_idx = np.argsort(arr, axis=-1)
-        chain[..., ts.beta_idx] = np.take_along_axis(
-            beta_full, sorted_idx, axis=-1)
-        chain[..., ts.tau_idx] = np.take_along_axis(
-            tau_full, sorted_idx, axis=-1)
+        # Decide whether to order by β or τ
+        if self.relabel_strategy == 'beta':
+            order_by_beta = True
+        elif self.relabel_strategy == 'tau':
+            order_by_beta = False
+        else:
+            ts = self.theta_space
+            _, beta, tau, _, _ = ts.slice_params(chain, clip=False)
+            beta_flat = beta.reshape(-1, ts.p_max)
+            tau_flat = tau.reshape(-1, ts.p_max)
+
+            # Rescale parameters to common units
+            beta_scale = np.nanmean(
+                norm.cdf(
+                    beta_flat,
+                    loc=np.nanmean(beta_flat),
+                    scale=np.nanstd(beta_flat)),
+                axis=0)
+            tau_scale = np.nanmean(
+                norm.cdf(
+                    tau_flat,
+                    loc=np.nanmean(tau_flat),
+                    scale=np.nanstd(tau_flat)),
+                axis=0)
+
+            # Look for the maximum pairwise distance
+            if ts.p_max > 1:
+                pdist_beta_max = np.max(pdist(beta_scale.reshape(-1, 1)))
+                pdist_tau_max = np.max(pdist(tau_scale.reshape(-1, 1)))
+            else:
+                pdist_beta_max = beta_scale[0]
+                pdist_tau_max = tau_scale[0]
+
+            order_by_beta = True if pdist_beta_max > pdist_tau_max else False
+
+        # Impose identifiability constraints
+        relabel_sample(chain, self.theta_space, order_by_beta)
 
     def _compute_burn(self):
         if self.burn is None:
@@ -871,6 +905,7 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
         n_iter_warmup: int = 100,
         step_fn: Optional[StepType] = None,
         step_kwargs: Dict = {},
+        relabel_strategy: str = 'auto',
         thin: int = 1,
         thin_pp: int = 5,
         burn: Optional[int] = None,
@@ -895,6 +930,7 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
         self.step_fn = step_fn
         self.step_kwargs = step_kwargs
         self.n_iter_warmup = n_iter_warmup
+        self.relabel_strategy = relabel_strategy
         self.thin = thin
         self.thin_pp = thin_pp
         self.burn = burn

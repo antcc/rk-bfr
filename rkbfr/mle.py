@@ -112,6 +112,8 @@ def compute_mle(
         raise ValueError(
             "Parameter 'strategy' must be one of {'local', 'global'}.")
 
+    # Transform back and apply identifiability constraint
+
     mle_theta = theta_space.backward(mle_theta_tr)
 
     return mle_theta, bic

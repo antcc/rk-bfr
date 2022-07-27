@@ -95,6 +95,17 @@ def apply_threshold(y, th=0.5):
     return y_th
 
 
+def relabel_sample(sample, theta_space, order_by_beta):
+    _, beta, tau, _, _ = theta_space.slice_params(sample, clip=False)
+    arr = beta if order_by_beta else tau
+
+    sorted_idx = np.argsort(arr, axis=-1)
+    sample[..., theta_space.beta_idx] = np.take_along_axis(
+        beta, sorted_idx, axis=-1)
+    sample[..., theta_space.tau_idx] = np.take_along_axis(
+        tau, sorted_idx, axis=-1)
+
+
 def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
     """All the pp arrays must have the same shape (the shape of y_obs)."""
     dim_name = "prediction"
