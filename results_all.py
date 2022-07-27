@@ -678,7 +678,7 @@ def main():
     etas = [10**i for i in range(args.eta_range[0], args.eta_range[1] + 1)]
     params = [etas]
     params_names = ["eta"]
-    params_symbols = ["p", "η"]
+    params_symbols = ["η"]
 
     if include_p:
         prior_p = dict(enumerate(args.p_prior, start=1))
@@ -689,6 +689,7 @@ def main():
         p_max = None
         params = [ps] + params
         params_names = ["p"] + params_names
+        params_symbols = ["p"] + params_symbols
 
     # MCMC parameters
     beta_range = (-1000, 1000) if include_p else None
@@ -1005,15 +1006,11 @@ def main():
                     if args.kind == "linear":
                         score = mean_squared_error(
                             y_test, y_pred, squared=False)
-                        param_values = [
-                            estimator.n_components(strategy),
-                            *param_without_p
-                        ]
-                        rrmse_bayesian_all[(strategy, *param_values)].append(
+                        rrmse_bayesian_all[(strategy, *param)].append(
                             score/np.std(y_test))
                     else:
                         score = accuracy_score(y_test, y_pred)
-                    score_bayesian_all[(strategy, *param_values)].append(score)
+                    score_bayesian_all[(strategy, *param)].append(score)
 
                 # Variable selection: compute score on test set
                 for pe in point_estimates:
@@ -1023,15 +1020,11 @@ def main():
                     if args.kind == "linear":
                         score = mean_squared_error(
                             y_test, y_pred, squared=False)
-                        param_values = [
-                            estimator.n_components(pe),
-                            *param_without_p
-                        ]
-                        rrmse_var_sel_all[(pe, *param_values)].append(
+                        rrmse_var_sel_all[(pe, *param)].append(
                             score/np.std(y_test))
                     else:
                         score = accuracy_score(y_test, y_pred)
-                    score_var_sel_all[(pe, *param_values)].append(score)
+                    score_var_sel_all[(pe, *param)].append(score)
 
             exec_times[rep, 1] = time.time() - start
 
