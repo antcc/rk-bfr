@@ -6,6 +6,7 @@ import aesara.tensor as at
 import numpy as np
 import pymc as pm
 from scipy.special import expit
+from scipy.stats import beta as beta_dist
 
 from .utils import apply_threshold, compute_mode_xarray
 
@@ -507,7 +508,8 @@ def log_prior_linear_logistic(
     b0,
     g,
     eta,
-    prior_p=None
+    prior_p=None,
+    tau_params=None
 ):
     p, beta_full, tau_full, alpha0, sigma2 = \
         theta_space.slice_params(theta_tr, transform='backward', clip=False)
@@ -550,12 +552,20 @@ def log_prior_linear_logistic(
     G_tau_reg = G_tau + eta * \
         np.max(np.linalg.eigvalsh(G_tau))*np.identity(p)
 
+    # Compute tau factor
+    if tau_params is not None:
+        tau_factor = np.sum(
+            np.log(beta_dist.pdf(tau, tau_params[:p, 0], tau_params[:p, 1])))
+    else:
+        tau_factor = 0
+
     # Compute sigma2 factor
     # (currently we only allow for LogSq transformation)
     sigma2_factor = 2 if theta_space.sigma2_ttr.name == "Identity" else 0
 
     # Compute log-prior
     log_prior = (0.5*np.linalg.slogdet(G_tau_reg)[1]
+                 + tau_factor
                  - (p + sigma2_factor)*log_sigma
                  - b.T@G_tau_reg@b/(2*g*sigma2))
 

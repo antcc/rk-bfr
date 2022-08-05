@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import warnings
 from abc import ABC, abstractmethod
+from itertools import permutations
 from multiprocessing import Pool
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
@@ -13,7 +14,9 @@ import emcee
 import numpy as np
 import pymc as pm
 from pymc.step_methods.arraystep import BlockedStep
+from scipy.optimize import minimize
 from scipy.spatial.distance import pdist
+from scipy.stats import beta as beta_dist
 from scipy.stats import norm
 from skfda.representation import FData
 from skfda.representation.basis import FDataBasis
@@ -323,7 +326,56 @@ class _BayesianRKHSFRegression(
                 )
             prior_kwargs["prior_p"] = dict(sorted(self.prior_p.items()))
 
+        if self.prior_tau is not None:
+            if isinstance(self.prior_tau, np.ndarray):
+                tau_params = self.prior_tau
+            elif self.prior_tau == 'auto':
+                tau_params = self._get_tau_params(X)
+            else:
+                raise ValueError("Invalid value for prior_tau.")
+
+            prior_kwargs["tau_params"] = tau_params
+
         return prior_kwargs
+
+    def _get_tau_params(self, X):
+        ts = self.theta_space
+
+        def f(x):
+            """Variance of Beta(a, b)."""
+            a, b = x
+            return (a*b/((a+b)**2*(a+b+1)))
+
+        tau_params = np.zeros((ts.p_max, 2))
+        obj = X.var(axis=0)
+        obj = obj/np.sum(obj)
+
+        for i in range(ts.p_max):
+            M = np.argmax(obj)/len(ts.grid)
+
+            params = minimize(
+                f,
+                x0=[1.01, 1.01],
+                constraints=[
+                    {'type': 'eq',
+                     'fun': lambda x: (1 - M)*x[0] - M*x[1] + 2*M - 1},
+                    {'type': 'eq',
+                     'fun': lambda x: (
+                        beta_dist.ppf(0.75, x[0], x[1])
+                        - beta_dist.ppf(0.25, x[0], x[1])
+                        - 1./(ts.p_max**2))}],
+                bounds=[(1.01, 50), (1.01, 50)]
+            ).x
+
+            tau_params[i] = params
+
+            # Subtract normalized pdf to normalized var
+            pdf = beta_dist.pdf(ts.grid, *params)
+            pdf = pdf/np.sum(pdf)
+            pdf[0] = pdf[-1] = 1.0
+            obj -= pdf
+
+        return tau_params
 
     def _discard_components(self, trace):
         # Set unused values to NaN on each sample
@@ -438,6 +490,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         g: float = 5.0,
         eta: float = 1.0,
         prior_p: Optional[Dict] = None,
+        prior_tau: Optional[Union[str, np.ndarray]] = None,
         n_iter_warmup: int = 100,
         initial_state: Union[str, np.ndarray] = 'mle',
         frac_random: float = 0.3,
@@ -469,6 +522,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         self.g = g
         self.eta = eta
         self.prior_p = prior_p
+        self.prior_tau = prior_tau
         self.n_iter_warmup = n_iter_warmup
         self.initial_state = initial_state
         self.frac_random = frac_random
@@ -519,6 +573,8 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         else:
             log_posterior = log_posterior_logistic
 
+        posterior_args = (X, y)
+
         posterior_kwargs = {
             "theta_space": ts,
             "rng": self.rng_,
@@ -559,7 +615,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
                 ts.n_dim,
                 log_posterior,
                 pool=pool,
-                args=(X, y,),
+                args=posterior_args,
                 kwargs=posterior_kwargs,
                 moves=self.moves
             )
@@ -609,7 +665,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
 
         # Relabel elements to correct label switching
 
-        self._relabel_trace()
+        self._relabel_trace(log_posterior, posterior_args, posterior_kwargs)
 
         # Get data (after burn-in and thinning)
 
@@ -652,46 +708,78 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         if ts.include_p:
             self._discard_components(trace)
 
-    def _relabel_trace(self):
+    def _relabel_trace(self, log_posterior=None, lp_args=None, lp_kwargs=None):
         chain = self._sampler.backend.chain[self.burn_:, :, :]
+        chain_shape = chain.shape
+        ts = self.theta_space
 
-        # Decide whether to order by β or τ
-        if self.relabel_strategy == 'beta':
-            order_by_beta = True
-        elif self.relabel_strategy == 'tau':
-            order_by_beta = False
+        if self.relabel_strategy == 'pivot':
+            chain_flat = chain.reshape(-1, ts.n_dim)
+
+            # Get reference theta (MAP)
+            ref_idx = np.argmax(
+                [log_posterior(x, *lp_args, **lp_kwargs) for x in chain_flat])
+            ref_theta = chain_flat[ref_idx, :]
+
+            # Get all permutations of β/τ
+            all_perm = np.zeros((
+                np.math.factorial(ts.p_max), *chain_flat.shape))
+            for i, perm in enumerate(permutations(range(ts.p_max))):
+                pp = np.array(perm)
+                idx = np.concatenate((pp, pp + ts.p_max, [-2, -1]))
+                all_perm[i] = chain_flat[:, idx]
+
+            # For each permutation, get distance between each iteration
+            # and the reference value
+            all_perm_dist = np.linalg.norm(all_perm - ref_theta, axis=2)
+
+            # For each iteration find the permutation that minimizes the distance
+            idx_min = np.argmin(all_perm_dist, axis=0)
+
+            # Select the corresponding permutations
+            new_chain = np.take_along_axis(
+                all_perm, idx_min[None, :, None], axis=0)
+
+            # Overwrite trace with the original shape
+            chain[:, :, :] = new_chain.reshape(*chain_shape)
+
         else:
-            ts = self.theta_space
-            _, beta, tau, _, _ = ts.slice_params(chain, clip=False)
-            beta_flat = beta.reshape(-1, ts.p_max)
-            tau_flat = tau.reshape(-1, ts.p_max)
+            # Decide whether to order by β or τ
+            if self.relabel_strategy == 'beta':
+                order_by_beta = True
+            elif self.relabel_strategy == 'tau':
+                order_by_beta = False
+            else:  # 'auto'
+                _, beta, tau, _, _ = ts.slice_params(chain, clip=False)
+                beta_flat = beta.reshape(-1, ts.p_max)
+                tau_flat = tau.reshape(-1, ts.p_max)
 
-            # Rescale parameters to common units
-            beta_scale = np.nanmean(
-                norm.cdf(
-                    beta_flat,
-                    loc=np.nanmean(beta_flat),
-                    scale=np.nanstd(beta_flat)),
-                axis=0)
-            tau_scale = np.nanmean(
-                norm.cdf(
-                    tau_flat,
-                    loc=np.nanmean(tau_flat),
-                    scale=np.nanstd(tau_flat)),
-                axis=0)
+                # Rescale parameters to common units
+                beta_scale = np.nanmean(
+                    norm.cdf(
+                        beta_flat,
+                        loc=np.nanmean(beta_flat),
+                        scale=np.nanstd(beta_flat)),
+                    axis=0)
+                tau_scale = np.nanmean(
+                    norm.cdf(
+                        tau_flat,
+                        loc=np.nanmean(tau_flat),
+                        scale=np.nanstd(tau_flat)),
+                    axis=0)
 
-            # Look for the maximum pairwise distance
-            if ts.p_max > 1:
-                pdist_beta_max = np.max(pdist(beta_scale.reshape(-1, 1)))
-                pdist_tau_max = np.max(pdist(tau_scale.reshape(-1, 1)))
-            else:
-                pdist_beta_max = beta_scale[0]
-                pdist_tau_max = tau_scale[0]
+                # Look for the maximum pairwise distance
+                if ts.p_max > 1:
+                    pdist_beta_max = np.max(pdist(beta_scale.reshape(-1, 1)))
+                    pdist_tau_max = np.max(pdist(tau_scale.reshape(-1, 1)))
+                else:
+                    pdist_beta_max = beta_scale[0]
+                    pdist_tau_max = tau_scale[0]
 
-            order_by_beta = True if pdist_beta_max > pdist_tau_max else False
+                order_by_beta = True if pdist_beta_max > pdist_tau_max else False
 
-        # Impose identifiability constraints
-        relabel_sample(chain, self.theta_space, order_by_beta)
+            # Impose identifiability constraints
+            relabel_sample(chain, self.theta_space, order_by_beta)
 
     def _compute_burn(self):
         if self.burn is None:
@@ -902,6 +990,7 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
         g: float = 5.0,
         eta: float = 1.0,
         prior_p: Optional[Dict] = None,
+        prior_tau: Optional[Union[str, np.ndarray]] = None,
         n_iter_warmup: int = 100,
         step_fn: Optional[StepType] = None,
         step_kwargs: Dict = {},
@@ -927,6 +1016,7 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
         self.g = g
         self.eta = eta
         self.prior_p = prior_p
+        self.prior_tau = prior_tau
         self.step_fn = step_fn
         self.step_kwargs = step_kwargs
         self.n_iter_warmup = n_iter_warmup
