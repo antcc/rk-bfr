@@ -280,7 +280,7 @@ def multiple_logistic_regression_cv(
 
         # Emcee+LR
         clf_lst.append((
-            f"{prefix}_{pe}+logistic",
+            f"{prefix}_{pe}+log",
             Pipeline([
                 ("clf", LogisticRegression(random_state=random_state))]),
             params_clf

@@ -1079,7 +1079,7 @@ def main():
             for (k, *params), v in score_bayesian_all.items()])
         mean_scores.append([
             (
-                args.method + "_" + k + "+logistic",
+                args.method + "_" + k + "+log",
                 *params,
                 np.mean(v), np.std(v)
             )

@@ -1213,7 +1213,7 @@ def main():
             (args.method + "_" + k, np.mean(v), np.std(v))
             for k, v in score_bayesian_best.items()])
         mean_scores.append([
-            (args.method + "_" + k + "+logistic", np.mean(v), np.std(v))
+            (args.method + "_" + k + "+log", np.mean(v), np.std(v))
             for k, v in score_var_sel_best.items()])
 
     df_metrics_ref = pd.DataFrame(
