@@ -22,7 +22,7 @@ data/
 # Ignore results files
 results*/*
 html/
-demos/*results*
+demo_results*
 
 # Ignore pickled files
 *.mcmc
