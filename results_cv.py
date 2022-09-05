@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 from reference_methods._fpls import FPLSBasis
-from rkbfr import preprocessing, simulation
+import simulation_utils as simulation
 from rkbfr.bayesian_model import ThetaSpace, probability_to_label
 from rkbfr.mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
                                 BFLogisticPymc)
@@ -51,8 +51,8 @@ pd.set_option('display.max_columns', 80)
 RUN_REF_ALGS = True
 VERBOSE = True
 PRECOMPUTE_MLE = True
-PRINT_TO_FILE = True
-SAVE_RESULTS = True
+PRINT_TO_FILE = False
+SAVE_RESULTS = False
 PRINT_PATH = "results/"
 SAVE_PATH = PRINT_PATH + "out/"
 
@@ -127,7 +127,7 @@ def get_arg_parser():
         help="fraction of data used for training"
     )
     parser.add_argument(
-        "--noise", type=float, default=0.1,
+        "--noise", type=float, default=0.05,
         help="fraction of noise for logistic synthetic data"
     )
     parser.add_argument(
@@ -328,7 +328,7 @@ def get_data_linear(
             raise ValueError("Real data set must be 'tecator', "
                              "'moisture' or 'sugar'.")
 
-        grid = preprocessing.normalize_grid(
+        grid = simulation.normalize_grid(
             X_fd.grid_points[0], tau_range[0], tau_range[1])
 
         X_fd = FDataGrid(X_fd.data_matrix, grid)
@@ -342,7 +342,7 @@ def get_data_linear(
 
         smoothing_params = np.logspace(-4, 4, 50)
 
-        X_fd, _ = preprocessing.smooth_data(
+        X_fd, _ = simulation.smooth_data(
             X_fd,
             smoother,
             smoothing_params
@@ -358,7 +358,7 @@ def get_data_logistic(
     n_grid=100,
     kernel_fn=None,
     beta_coef=None,
-    noise=0.1,
+    noise=0.05,
     initial_smoothing=False,
     tau_range=(0, 1),
     kernel_fn2=None,
@@ -377,7 +377,7 @@ def get_data_logistic(
             X, y = simulation.generate_mixture_dataset(
                 grid, mean_vector, mean_vector2,
                 kernel_fn, kernel_fn2,
-                n_samples, rng,
+                n_samples, noise, rng,
             )
 
         else:  # Logistic model (RKHS or L2)
@@ -443,7 +443,7 @@ def get_data_logistic(
             raise ValueError("Real data set must be 'medflies', "
                              "'growth' or 'phoneme'.")
 
-        grid = preprocessing.normalize_grid(
+        grid = simulation.normalize_grid(
             X_fd.grid_points[0], tau_range[0], tau_range[1])
 
         X_fd = FDataGrid(X_fd.data_matrix, grid)
@@ -457,7 +457,7 @@ def get_data_logistic(
 
         smoothing_params = np.logspace(-4, 4, 50)
 
-        X_fd, _ = preprocessing.smooth_data(
+        X_fd, _ = simulation.smooth_data(
             X_fd,
             smoother,
             smoothing_params
@@ -514,7 +514,7 @@ def get_reference_models_logistic(X, y, seed):
     Cs = np.logspace(-4, 4, 20)
     n_selected = [5, 10, 15, 20, 25, 50]
     n_components = [2, 3, 4, 5, 7, 10, 15, 20]
-    n_neighbors = [3, 5, 7, 11]
+    n_neighbors = [3, 5, 7, 9, 11]
 
     pls_regressors = [
         PLSRegressionWrapper(n_components=p) for p in n_components]
@@ -1009,10 +1009,10 @@ def main():
                     stratify=y, random_state=seed + rep)
 
             # Standardize data (always center regressors)
-            X_train, X_test = preprocessing.standardize_predictors(
+            X_train, X_test = simulation.standardize_predictors(
                 X_train, X_test, scale=args.standardize)
             if args.standardize and args.kind == "linear":
-                y_train, y_test = preprocessing.standardize_response(
+                y_train, y_test = simulation.standardize_response(
                     y_train, y_test)
 
             ##
@@ -1312,7 +1312,7 @@ def main():
         print(f"Data name: {args.data_name}")
 
     if args.kind == "logistic":
-        print(f"Noise: {int(100*args.noise)}%")
+        print(f"Noise: {2*int(100*args.noise)}%")
 
     print("\n-- BAYESIAN RKHS MODEL --")
     print("Number of components (p):", (prior_p if include_p else ps))

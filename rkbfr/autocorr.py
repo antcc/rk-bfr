@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 
 """
-Source file from emcee/autocorr.py (v 3.1.2)
+Source file from emcee/autocorr.py (v 3.1.2).
+
+Maintained separately to implement a minor change when computing
+the autocorrelation times (i.e. substitute the missing values with 0).
 """
 
 import logging

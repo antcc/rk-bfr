@@ -55,11 +55,13 @@ class _BayesianRKHSFRegression(
     BaseEstimator,
     TransformerMixin
 ):
-    """Bayesian functional regression.
+    """Bayesian functional regression based on a RKHS model.
 
     This estimator can be used both as an end-to-end regressor/classifier
     (via the 'predict' method) or as a variable selection
     procedure (via the 'transform' method).
+
+    See https://github.com/antcc/tfm for more details on the model.
     """
 
     default_point_estimates = ['mean', 'median', 'mode']
@@ -71,6 +73,7 @@ class _BayesianRKHSFRegression(
 
     @abstractmethod
     def fit(self, X, y):
+        """Fit the estimator."""
         # Initialization tasks
         self.rng_ = check_random_state(self.random_state)
         self.n_jobs_ = self.n_jobs if self.n_jobs > 0 else os.cpu_count()
@@ -97,8 +100,10 @@ class _BayesianRKHSFRegression(
         strategy='mode',
         bw='experimental'
     ) -> np.ndarray:
-        """The parameter 'strategy' can be {'mean', 'median', 'mode', 'posterior_mean'}
-           or a callable representing a point estimate."""
+        """Predict using the posterior distribution.
+
+        The parameter 'strategy' can be {'mean', 'median', 'mode',
+        'posterior_mean'} or a callable representing a point estimate."""
         check_is_fitted(self)
         X = self._argcheck_X(X)
         ts = self.theta_space
@@ -151,6 +156,8 @@ class _BayesianRKHSFRegression(
         return y_pred
 
     def transform(self, X: DataType, pe='mode', bw='experimental') -> DataType:
+        """Use the estimator to transform the data set, performing
+        variable selection according to the posterior of the time instants."""
         check_is_fitted(self)
         ts = self.theta_space
 
@@ -179,6 +186,7 @@ class _BayesianRKHSFRegression(
         return X_red
 
     def score(self, X: DataType, y: np.ndarray, strategy='mode') -> float:
+        """Score of the estimator."""
         X, y = self._argcheck_X_y(X, y)
 
         y_pred = self.predict(X, strategy)
@@ -191,6 +199,8 @@ class _BayesianRKHSFRegression(
         return score
 
     def summary(self, stats='stats', bw='experimental', **kwargs):
+        """Get a summary of the posterior distribution and the
+        MCMC statistics."""
         check_is_fitted(self)
 
         skipna = self.theta_space.include_p
@@ -213,6 +223,8 @@ class _BayesianRKHSFRegression(
         )
 
     def n_components(self, strategy, bw="experimental"):
+        """Get how many components are actually used in each prediction
+        strategy. Only relevant in the P_FREE case."""
         check_is_fitted(self)
         ts = self.theta_space
 
@@ -237,11 +249,13 @@ class _BayesianRKHSFRegression(
         return ts.round_p(n_comp)
 
     def get_idata(self):
+        """Get the InferenceData object representing the posterior."""
         check_is_fitted(self)
 
         return self.idata_
 
     def total_samples(self):
+        """Get the total number of samples."""
         check_is_fitted(self)
 
         n_samples = (self.idata_.posterior.dims["chain"]
@@ -250,6 +264,7 @@ class _BayesianRKHSFRegression(
         return n_samples
 
     def autocorrelation_times(self, burn=None, thin=None):
+        """Compute the autocorrelation times."""
         check_is_fitted(self)
 
         if burn is None:
@@ -465,13 +480,89 @@ class _BayesianRKHSFRegression(
 
 
 class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
-    """Bayesian functional regression.
+    """Bayesian functional regression based on a RKHS model.
 
-    It uses 'emcee' as the underlying MCMC algorithm for
+    It uses 'emcee' [1] as the underlying MCMC algorithm for
     approximating the posterior distribution.
 
-    See [REFERENCE].
+    Parameters
+    ----------
+    theta_space : ThetaSpace
+        Object representing the finite-dimensional parameter space.
+    n_walkers : int
+        Number of walkers (chains).
+    n_iter : int
+        Number of iterations.
+    log_prior : Optional[PriorType]
+        A function representing the joint log-prior distribution.
+    prior_kwargs : Dict
+        Additional arguments for the log-prior distribution.
+    b0 : Union[str, np.ndarray]
+        Hyperparameter of the default prior distribution.
+    g : float
+        Hyperparameter of the default prior distribution.
+    eta : float
+        Hyperparameter of the default prior distribution.
+    prior_p : Optional[Dict]
+        Prior probabilities for each value of p (P_FREE).
+    prior_tau : Optional[Union[str, np.ndarray]]
+        If None, tau defaults to a uniform prior. If 'auto' or a np.ndarray,
+        set a beta distribution on tau, with automatic or pre-specified
+        shape parameters.
+    n_iter_warmup : int
+        Number of initial iterations (only as warm-up; they
+        are discarded afterwards).
+    initial_state : Union[str, np.ndarray]
+        Initial state of the chains. Can be an approximation of the MLE ('mle'),
+        random points ('random') or a given np.ndarray.
+    frac_random : float
+        Fraction of the chains that get a random initial point regardless
+        of the value of 'initial_state'.
+    relabel_strategy : str
+        Strategy for relabeling the samples in order to avoid label
+        switching. It can be one of {'auto', 'pivot', 'beta', 'tau'}.
+    moves : Optional[Sequence[emcee.moves.Move]]
+        Moves for the emcee sampler.
+    compute_pp : bool
+        Whether to compute the posterior predictive distribution "on-line".
+    compute_ll : bool
+        Whether to compute the point-wise log-likelihood of the generated
+        samples.
+    thin : int
+        Number of consecutive samples to skip from the chains.
+    thin_pp : int
+        Number of consecutive samples to skip from the chains when computing
+        the posterior predictive distribution.
+    burn : int
+        Number of samples to discard from the chains.
+    burn_relative : int
+        Number of samples to discard from the chains, relative to the
+        autocorrelation times.
+    mle_precomputed : Optional[np.ndarray]
+        Whether the MLE is supplied as a precomputed value.
+    mle_method : str
+        Method to use when approximating the MLE ('local' or 'global').
+    mle_strategy : str
+        Local optimization method for MLE approximation.
+    n_reps_mle : int
+        Number of independent runs of the MLE approximation algorithm.
+    threshold : float
+        Threshold for generating predictions in logistic regression. Ignored
+        in linear regression.
+    n_jobs : int
+        Number of cores ot use.
+    verbose : int
+        Verbosity level.
+    progress_notebook : bool
+        Whether to show a progress bar in notebook style.
+    progress_kwargs : Optional[Dict]
+        Additional arguments for the progress bar.
+    random_state : Optional[RandomType]
+        Random state for reproducibility.
+
+    [1] https://emcee.readthedocs.io/
     """
+
     sd_beta: float = 1.0
     sd_tau: float = 0.2
     sd_alpha0: float = 1.0
@@ -679,7 +770,7 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         return np.mean(self._sampler.acceptance_fraction)
 
     def get_trace(self, burn=None, thin=None, flat=False):
-        """Trace is (n_iter, n_walkers, n_dim)."""
+        """Get the trace of the sampler, with shape (n_iter, n_walkers, n_dim)."""
         check_is_fitted(self)
 
         if burn is None:
@@ -970,12 +1061,70 @@ class BFLogisticEmcee(
 
 
 class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
-    """Bayesian functional linear regression.
+    """Bayesian functional regression based on a RKHS model.
 
-    It uses 'pymc' as the underlying MCMC algorithm for
-    approximating the posterior distribution.
+    It uses 'pymc' [1] as a library for approximating the
+    posterior distribution.
 
-    See [REFERENCE].
+    Parameters
+    ----------
+    theta_space : ThetaSpace
+        Object representing the finite-dimensional parameter space.
+    n_walkers : int
+        Number of walkers (chains).
+    n_iter : int
+        Number of iterations.
+    model_fn : Optional[ModelType]
+        Function that generates a pymc model.
+    model_kwargs : Dict
+        Additional model arguments.
+    b0 : Union[str, np.ndarray]
+        Hyperparameter of the default prior distribution.
+    g : float
+        Hyperparameter of the default prior distribution.
+    eta : float
+        Hyperparameter of the default prior distribution.
+    prior_p : Optional[Dict]
+        Prior probabilities for each value of p (P_FREE).
+    prior_tau : Optional[Union[str, np.ndarray]]
+        [CURRENTLY NOT IMPLEMENTED] If None, tau defaults to a uniform
+        prior. If 'auto' or a np.ndarray, set a beta distribution on tau,
+        with automatic or pre-specified shape parameters.
+    n_iter_warmup : int
+        Number of initial iterations (only as warm-up; they
+        are discarded afterwards).
+    step_fn : Optional[StepType]
+        MCMC sampler to use ("step" in pymc jargon)
+    step_kwargs : Dict
+        Additional sampler parameters.
+    relabel_strategy : str
+        Strategy for relabeling the samples in order to avoid label
+        switching. It can be one of {'auto', 'pivot', 'beta', 'tau'}.
+    thin : int
+        Number of consecutive samples to skip from the chains.
+    thin_pp : int
+        Number of consecutive samples to skip from the chains when computing
+        the posterior predictive distribution.
+    burn : int
+        Number of samples to discard from the chains.
+    mle_precomputed : Optional[np.ndarray]
+        Whether the MLE is supplied as a precomputed value.
+    mle_method : str
+        Method to use when approximating the MLE ('local' or 'global').
+    mle_strategy : str
+        Local optimization method for MLE approximation.
+    n_reps_mle : int
+        Number of independent runs of the MLE approximation algorithm.
+    threshold : float
+        Threshold for generating predictions in logistic regression.
+    n_jobs : int
+        Number of cores ot use.
+    verbose : int
+        Verbosity level.
+    random_state : Optional[RandomType]
+        Random state for reproducibility.
+
+    [1] https://www.pymc.io/.
     """
 
     def __init__(
@@ -1129,6 +1278,7 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
         return self
 
     def mean_acceptance(self):
+        """Get the mean acceptance of the sampler."""
         check_is_fitted(self)
 
         stats = self.idata_.sample_stats
@@ -1141,6 +1291,7 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
             return np.nan
 
     def get_trace(self, burn=None, thin=None, flat=False):
+        """Get the trace of the sampler."""
         check_is_fitted(self)
         if burn is None:
             burn = self.burn_
@@ -1155,6 +1306,7 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
         return trace
 
     def to_graphviz(self):
+        """Generate a graphical representation of the Bayesian model."""
         return pm.model_graph.model_to_graphviz(self.model_)
 
 

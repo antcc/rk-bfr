@@ -1,9 +1,13 @@
 # encoding: utf-8
 
 import numpy as np
+from rkbfr.bayesian_model import (ThetaSpace, apply_label_noise,
+                                  generate_response_linear)
+from rkbfr.utils import IgnoreWarnings
 from scipy.integrate import trapz
-
-from .bayesian_model import ThetaSpace, generate_response_linear
+from skfda.preprocessing.smoothing.validation import (
+    LinearSmootherGeneralizedCVScorer, SmoothingParameterSearch,
+    akaike_information_criterion)
 
 
 def brownian_kernel(s, t, sigma=1.0):
@@ -107,7 +111,7 @@ def generate_rkhs_dataset(
 def generate_mixture_dataset(
         grid, mean_vector, mean_vector2,
         kernel_fn, kernel_fn2,
-        n_samples, rng=None,
+        n_samples, random_noise=None, rng=None,
 ):
     """Generate dataset based on a known distribution on X|Y."""
     if rng is None:
@@ -135,4 +139,58 @@ def generate_mixture_dataset(
     X = X[idx, :]
     y = y[idx]
 
+    if random_noise is not None:
+        y = apply_label_noise(y, random_noise, rng)
+
+
     return X, y
+
+
+def normalize_grid(grid, low=0, high=1):
+    g_min, g_max = np.min(grid), np.max(grid)
+    return (grid - g_min)/(g_max - g_min)
+
+
+def smooth_data(X, smoother, params, X_test=None):
+    best_smoother = SmoothingParameterSearch(
+        smoother,
+        params,
+        scoring=LinearSmootherGeneralizedCVScorer(
+            akaike_information_criterion),
+        n_jobs=-1,
+    )
+
+    with IgnoreWarnings():
+        best_smoother.fit(X)
+
+    X_tr = best_smoother.transform(X)
+
+    if X_test is not None:
+        X_test_tr = best_smoother.transform(X_test)
+        return X_tr, best_smoother, X_test_tr
+
+    return X_tr, best_smoother
+
+
+def standardize_response(y, y_test):
+    y_m = y.mean()
+    y_sd = y.std()
+
+    y_tr = (y - y_m)/y_sd
+    y_test_tr = (y_test - y_m)/y_sd
+
+    return y_tr, y_test_tr
+
+
+def standardize_predictors(X, X_test, scale=False):
+    X_m = X.mean(axis=0)
+
+    if scale:
+        X_sd = np.sqrt(X.var())
+    else:
+        X_sd = 1.0
+
+    X_tr = (X - X_m)/X_sd
+    X_test_tr = (X_test - X_m)/X_sd
+
+    return X_tr, X_test_tr

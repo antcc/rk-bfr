@@ -1,46 +1,56 @@
+from __future__ import annotations
+
 from multiprocessing import Pool
+from typing import Callable
 
 import numpy as np
 import scipy
 
-from .bayesian_model import neg_ll_linear, neg_ll_logistic
+from .bayesian_model import ThetaSpace, neg_ll_linear, neg_ll_logistic
 from .utils import fdata_to_numpy
 
 
-def optimizer_global(
-    theta_space,
-    X,
-    y,
-    theta_init,
-    bounds,
-    neg_ll,
-    method,
-    random_state,
-):
-    mle = scipy.optimize.basinhopping(
-        neg_ll,
-        x0=theta_init,
-        seed=random_state,
-        minimizer_kwargs={"args": (X, y, theta_space),
-                          "method": method,
-                          "bounds": bounds}
-    ).x
-
-    return mle
-
-
 def compute_mle(
-    X,
-    y,
-    theta_space,
+    X: np.ndarray,
+    y: np.ndarray,
+    theta_space: ThetaSpace,
     *,
-    kind='linear',
-    method='Powell',
-    strategy='global',
-    n_reps=4,
-    n_jobs=2,
-    rng=None,
-):
+    kind: str = 'linear',
+    method: str = 'Powell',
+    strategy: str = 'global',
+    n_reps: int = 4,
+    n_jobs: int = 2,
+    rng: np.random.Generator = None,
+) -> [np.ndarray, float]:
+    """Computational approximation of the MLE.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Regressor matrix.
+    y : np.ndarray
+        Response array.
+    theta_space : ThetaSpace
+        Parameter space.
+    kind : str
+        Specify 'linear' or 'logistic' regression.
+    method : str
+        Method for local optimization.
+    strategy : str
+        Whether to use a 'local' or 'global' strategy
+    n_reps : int
+        Number of independent repetitions.
+    n_jobs : int
+        Number of cores to use.
+    rng : np.random.Generator
+        Random generator.
+
+    Returns
+    -------
+    [np.ndarray, float]
+        MLE approximation and corresponding BIC.
+    """
+
     if rng is None:
         rng = np.random.default_rng()
 
@@ -96,7 +106,7 @@ def compute_mle(
                 u) for u in random_states)
 
             mles = pool.starmap(
-                optimizer_global,
+                _optimizer_global,
                 args_optim
             )
 
@@ -112,14 +122,40 @@ def compute_mle(
         raise ValueError(
             "Parameter 'strategy' must be one of {'local', 'global'}.")
 
-    # Transform back and apply identifiability constraint
+    # Transform back
 
     mle_theta = theta_space.backward(mle_theta_tr)
 
     return mle_theta, bic
 
 
-def compute_bic(theta_space, neg_ll, mles, X, y):
+def compute_bic(
+    theta_space: ThetaSpace,
+    neg_ll: Callable,
+    mles: np.ndarray,
+    X: np.ndarray,
+    y: np.ndarray
+) -> np.ndarray:
+    """Compute the BIC associated to MLE values.
+
+    Parameters
+    ----------
+    theta_space : ThetaSpace
+        Parameter space.
+    neg_ll : Callable
+        Negative log-likelihood function.
+    mles : np.ndarray
+        Values of MLE to compute the BIC.
+    X : np.ndarray
+        Regressor matrix.
+    y : np.ndarray
+        Response array.
+
+    Returns
+    -------
+    np.ndarray
+        BIC values.
+    """
     n = X.shape[0]
     n_dim = theta_space.n_dim
 
@@ -128,3 +164,26 @@ def compute_bic(theta_space, neg_ll, mles, X, y):
                      for mle_theta in mles])
 
     return bics
+
+
+def _optimizer_global(
+    theta_space,
+    X,
+    y,
+    theta_init,
+    bounds,
+    neg_ll,
+    method,
+    random_state,
+):
+    """Global optimizer for approximating the MLE."""
+    mle = scipy.optimize.basinhopping(
+        neg_ll,
+        x0=theta_init,
+        seed=random_state,
+        minimizer_kwargs={"args": (X, y, theta_space),
+                          "method": method,
+                          "bounds": bounds}
+    ).x
+
+    return mle

@@ -71,6 +71,7 @@ def check_random_state(seed):
 
 
 def fdata_to_numpy(X, grid):
+    """Convert FData object to numpy array."""
     N = len(grid)
 
     if isinstance(X, np.ndarray):
@@ -88,6 +89,7 @@ def fdata_to_numpy(X, grid):
 
 
 def apply_threshold(y, th=0.5):
+    """Convert probabilities to class labels."""
     y_th = np.copy(y).astype(int)
     y_th[..., y >= th] = 1
     y_th[..., y < th] = 0
@@ -96,6 +98,7 @@ def apply_threshold(y, th=0.5):
 
 
 def relabel_sample(sample, theta_space, order_by_beta):
+    """Relabel sample by imposing an ordering constraint."""
     _, beta, tau, _, _ = theta_space.slice_params(sample, clip=False)
     arr = beta if order_by_beta else tau
 
@@ -107,7 +110,10 @@ def relabel_sample(sample, theta_space, order_by_beta):
 
 
 def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
-    """All the pp arrays must have the same shape (the shape of y_obs)."""
+    """Convert posterior predictive arrays to InferenceData.
+
+    All the pp arrays must have the same shape (the shape of y_obs).
+    """
     dim_name = "prediction"
     coords = idata.posterior[["chain", "draw"]].coords
     coords.update({dim_name: np.arange(0, pps[0].shape[-1])})
@@ -139,7 +145,10 @@ def pp_to_idata(pps, idata, var_names, y_obs=None, merge=False):
 
 
 def mode_fn(values, skipna=False, bw='experimental'):
-    """Note that NaN values are always ignored."""
+    """Compute the mode of the traces.
+
+    Note that NaN values are always ignored.
+    """
     if not skipna and np.isnan(values).any():
         warnings.warn("Your data appears to have NaN values.")
 
@@ -156,6 +165,7 @@ def compute_mode_xarray(
     skipna=False,
     bw='experimental'
 ):
+    """Compute the mode of a xarray object."""
     def mode_fn_args(x):
         return mode_fn(x, skipna=skipna, bw=bw)
 

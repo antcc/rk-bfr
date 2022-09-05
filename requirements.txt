@@ -1,8 +1,6 @@
 pymc>=4.0.0
-emcee
-scikit-learn
-scikit-fda
-ipykernel
-autopep8
-graphviz
-ipywidgets
+scipy==1.8.1
+numpy==1.22.4
+emcee==3.1.2
+scikit-learn==1.1.1
+scikit-fda==0.7.1

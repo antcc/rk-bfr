@@ -11,6 +11,10 @@ from scipy.stats import beta as beta_dist
 from .utils import apply_threshold, compute_mode_xarray
 
 
+##
+# TRANSFORMATIONS
+##
+
 class Identity():
     name = "Identity"
 
@@ -42,10 +46,41 @@ class LogSq():
     def backward(self, y):
         return np.exp(y)**2
 
-
-# Class for parameter space
+##
+# PARAMETER SPACE
+##
 
 class ThetaSpace():
+    """Finite-dimensional parameter space.
+
+    Parameters
+    ----------
+    p_max : type
+        Maximum value of 'p', the dimension of the model.
+    grid : type
+        Discretization grid.
+    include_p : type
+        Whether to include 'p' in the Bayesian model (P_FREE)
+    names : type
+        Names of the parameters.
+    labels : type
+        Labels for the parameters.
+    labeller : type
+        Labeller for Arviz visualization.
+    dim_name : type
+        Dimension name for arviz.
+    tau_range : type
+        Range of the parameter tau.
+    beta_range : type
+        Range of the parameter theta.
+    sigma2_ub : type
+        Upper bound of the parameter sigma2.
+    tau_ttr : type
+        Transformation for the parameter tau.
+    sigma2_ttr : type
+        Transformation for the parameter sigma2.
+    """
+
     eps = 1e-6
     N = 100
 
@@ -65,6 +100,7 @@ class ThetaSpace():
         tau_ttr=Identity(),
         sigma2_ttr=LogSq()
     ):
+
         # Save values
 
         if grid is None:
@@ -109,6 +145,8 @@ class ThetaSpace():
             self.names_ttr = self._get_names_ttr()
 
     def copy_p_fixed(self):
+        """Create a copy of the object where the parameter 'p'
+           is fixed."""
         if not self.include_p:
             return self
 
@@ -127,9 +165,11 @@ class ThetaSpace():
         )
 
     def round_p(self, p):
+        """Round p to the nearest integer."""
         return np.rint(p).astype(int)
 
     def slice_params(self, theta, transform=None, clip=True):
+        """Get the individual parameters of the parameter vector."""
         self._check_theta(theta)
 
         if transform is not None:
@@ -157,6 +197,7 @@ class ThetaSpace():
         return p, beta, tau, alpha0, sigma2
 
     def forward(self, theta):
+        """Transform the parameters."""
         self._check_theta(theta)
 
         theta_tr = self._perform_ttr(
@@ -167,6 +208,7 @@ class ThetaSpace():
         return theta_tr
 
     def backward(self, theta_tr):
+        """Inverse-transform the parameters."""
         self._check_theta(theta_tr)
 
         theta = self._perform_ttr(
@@ -177,6 +219,7 @@ class ThetaSpace():
         return theta
 
     def set_unused_nan(self, theta, inplace=True):
+        """Set unused values to NaN (only relevant when include_p=True)."""
         t = theta.copy() if not inplace else theta
         pp = self.round_p(t[self.p_idx])
         t[self.beta_idx[pp:]] = np.nan
@@ -186,7 +229,7 @@ class ThetaSpace():
             return t
 
     def clip_bounds(self, theta):
-        """'theta' is in the original space."""
+        """Clip the parameter 'theta' (in the original space)."""
         self._check_theta(theta)
 
         theta_clp = np.copy(theta)
@@ -297,7 +340,7 @@ PriorType = Callable[
 
 
 def generate_response_linear(X, theta, theta_space, noise=True, rng=None):
-    """Generate a linear response Y given X and θ"""
+    """Generate a linear RKHS response Y given X and θ"""
     theta = np.asarray(theta)
     ts = theta_space
 
@@ -339,7 +382,7 @@ def generate_response_logistic(
     th=0.5,
     rng=None
 ):
-    """Generate a logistic response Y given X and θ.
+    """Generate a logistic RKHS response Y given X and θ.
 
        Returns the response vector and (possibly) the probabilities associated.
     """
@@ -374,6 +417,7 @@ def probability_to_label(y_lin, random_noise=None, rng=None):
 
 
 def apply_label_noise(y, noise_frac=0.05, rng=None):
+    """Apply a random noise to the labels."""
     if rng is None:
         rng = np.random.default_rng()
 
@@ -398,6 +442,7 @@ def generate_pp(
         rng=None,
         verbose=False
 ):
+    """Generate posterior predictive distribution for the data X."""
     if rng is None:
         rng = np.random.default_rng()
 
@@ -425,8 +470,10 @@ def generate_pp(
 
 
 def point_estimate(idata, estimator_fn, names, skipna=False, bw='experimental'):
-    """If 'pe_fn' is a callable, it should have a specific signature, and also
-       treat the (chain, draw) dimensions suitably."""
+    """Summarize the posterior through a given estimator.
+
+    If 'pe_fn' is a callable, it should have a specific signature, and also
+    treat the (chain, draw) dimensions suitably."""
     posterior_trace = idata.posterior
 
     if callable(estimator_fn):
@@ -471,6 +518,7 @@ def point_predict(
     th=0.5,
     bw='experimental'
 ):
+    """Summarize-then-predict approach to prediction."""
     theta_hat = point_estimate(
         idata, estimator_fn, theta_space.names, skipna, bw)
     if kind == 'linear':

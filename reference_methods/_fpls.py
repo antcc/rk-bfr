@@ -28,8 +28,6 @@ def _scalar_product(f, g, K, grid):
     return simpson(g*inner_integral, x=grid)
 
 
-# TODO: Vectorize code (?)
-# [https://stackoverflow.com/questions/67242144/reducing-loops-with-numpy]
 def _modified_gram_schmidt(fs, K, grid):
     basis = []
 
