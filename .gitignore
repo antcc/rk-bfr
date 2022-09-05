@@ -20,7 +20,7 @@ launch*.sh
 data/
 
 # Ignore results files
-#results*/*
+results*/*
 html/
 
 # Ignore pickled files
