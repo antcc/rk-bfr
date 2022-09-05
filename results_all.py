@@ -11,15 +11,12 @@ import emcee
 import numpy as np
 import pandas as pd
 import pymc as pm
+import utils.simulation_utils as simulation
 from reference_methods._fpls import FPLSBasis
-import simulation_utils as simulation
 from rkbfr.bayesian_model import ThetaSpace, probability_to_label
 from rkbfr.mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
                                 BFLogisticPymc)
 from rkbfr.mle import compute_mle
-from run_utils import (bayesian_variable_selection_predict, cv_sk,
-                       linear_regression_comparison_suite,
-                       logistic_regression_comparison_suite)
 from skfda.datasets import (fetch_cran, fetch_growth, fetch_medflies,
                             fetch_phoneme, fetch_tecator)
 from skfda.exploratory.depth import IntegratedDepth, ModifiedBandDepth
@@ -32,7 +29,10 @@ from sklearn.linear_model import LogisticRegressionCV, RidgeCV
 from sklearn.metrics import accuracy_score, mean_squared_error
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn_utils import DataMatrix, PLSRegressionWrapper
+from utils.run_utils import (bayesian_variable_selection_predict, cv_sk,
+                             linear_regression_comparison_suite,
+                             logistic_regression_comparison_suite)
+from utils.sklearn_utils import DataMatrix, PLSRegressionWrapper
 
 ###################################################################
 # CONFIGURATION

@@ -30,7 +30,7 @@ from sklearn.metrics import accuracy_score, mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import NearestCentroid
 from sklearn.pipeline import Pipeline
-from sklearn_utils import (Basis, DataMatrix, FeatureSelector,
+from utils.sklearn_utils import (Basis, DataMatrix, FeatureSelector,
                            PLSRegressionWrapper)
 
 
