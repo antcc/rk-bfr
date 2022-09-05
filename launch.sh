@@ -1,18 +1,18 @@
 #!/bin/bash
 
-KIND=$1
-METHOD=$2
-DATA=$3
-KERNEL=$4
+KIND=$1  # 'emcee' or 'pymc'
+METHOD=$2  # 'linear' or 'logistic'
+DATA=$3  # 'rkhs', 'l2', 'gbm', 'mixture', 'real'
+KERNEL=$4  # 'bm', 'fbm', 'ou', 'sqexp', 'gbm', or 'homo/heteroscedastic'
 SEED=$5
-SMOOTHING=${6-"none"}
-MOVES=${7-"sw"}
+SMOOTHING=${6-"none"}  # 'none', 'nw' (Nadaraya-Watson) or 'basis'
+MOVES=${7-"sw"}  # 'sw', 'de' or 's'
 
 python -Wignore results_cv.py \
-    ${KIND} \
-	${METHOD} \
+  ${KIND} \
+  ${METHOD} \
 	${DATA} \
-	--kernel ${KERNEL} \
+	--kernel ${KERNEL} \   # For real data use --data-name [NAME]
 	--p-range 1 10 \
 	--seed ${SEED} \
 	--n-cores 4 \
@@ -25,8 +25,8 @@ python -Wignore results_cv.py \
 	--n-walkers 64 \
 	--n-iters 900 \
 	--n-tune 100 \
-    --n-burn 400 \
-    --n-reps-mle 4 \
+  --n-burn 400 \
+  --n-reps-mle 4 \
 	--eta-range -4 2 \
 	--g 5 \
 	--frac-random 0.3 \
