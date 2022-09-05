@@ -14,7 +14,7 @@ slurm*
 *ccc*
 
 # Ignore launch files
-launch*.sh
+launch_*.sh
 
 # Ignore data files
 data/
