@@ -31,7 +31,7 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import NearestCentroid
 from sklearn.pipeline import Pipeline
 from utils.sklearn_utils import (Basis, DataMatrix, FeatureSelector,
-                           PLSRegressionWrapper)
+                                 PLSRegressionWrapper)
 
 
 def linear_regression_metrics(

@@ -1,5 +1,19 @@
 # encoding: utf-8
 
+"""
+Script to carry out comparison experiments with several linear/logistic
+regression methods, functional and otherwise.
+
+A cross-validation loop is included to select the best hyperparameters
+for our Bayesian methods.
+
+For more information, run `python results_cv.py -h`.
+
+Example:
+
+`python results_cv.py linear emcee rkhs --kernel fbm --p-range 1 5 --n-folds 5 --n-reps 5`
+"""
+
 import argparse
 import os
 import sys

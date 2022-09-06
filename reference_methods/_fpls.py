@@ -196,8 +196,8 @@ class APLS(
         if isinstance(X, FDataBasis):
             X = X.to_grid(eval_points)
 
-        if (hasattr(self, "grid_") and
-                not np.array_equal(X.grid_points[0], self.grid_)):
+        if (hasattr(self, "grid_")
+                and not np.array_equal(X.grid_points[0], self.grid_)):
             raise ValueError("Grid must coincide for training and test data.")
 
         return X

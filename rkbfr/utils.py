@@ -1,5 +1,9 @@
 # encoding: utf-8
 
+"""
+Utility functions.
+"""
+
 import logging
 import numbers
 import os

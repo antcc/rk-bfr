@@ -1,5 +1,13 @@
 # encoding: utf-8
 
+"""
+File with the source code of the MCMC samplers implemented, for functional
+linear and logistic regression.
+
+There are two sampler versions: one with `emcee` (the preferred one)
+and one with `pymc`.
+"""
+
 from __future__ import annotations
 
 import os
@@ -376,9 +384,9 @@ class _BayesianRKHSFRegression(
                      'fun': lambda x: (1 - M)*x[0] - M*x[1] + 2*M - 1},
                     {'type': 'eq',
                      'fun': lambda x: (
-                        beta_dist.ppf(0.75, x[0], x[1])
-                        - beta_dist.ppf(0.25, x[0], x[1])
-                        - 1./(ts.p_max**2))}],
+                         beta_dist.ppf(0.75, x[0], x[1])
+                         - beta_dist.ppf(0.25, x[0], x[1])
+                         - 1./(ts.p_max**2))}],
                 bounds=[(1.01, 50), (1.01, 50)]
             ).x
 

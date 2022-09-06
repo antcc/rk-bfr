@@ -142,7 +142,6 @@ def generate_mixture_dataset(
     if random_noise is not None:
         y = apply_label_noise(y, random_noise, rng)
 
-
     return X, y
 
 

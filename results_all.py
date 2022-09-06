@@ -1,5 +1,19 @@
 # encoding: utf-8
 
+"""
+Script to carry out comparison experiments with several linear/logistic
+regression methods, functional and otherwise.
+
+Our Bayesian methods are fitted with all the hyperparameters specified,
+without a cross-validation loop.
+
+For more information, run `python results_all.py -h`.
+
+Example:
+
+`python results_all.py linear emcee rkhs --kernel fbm --p-range 1 5 --n-reps 5`
+"""
+
 import argparse
 import os
 import sys
@@ -55,6 +69,7 @@ PRINT_TO_FILE = False
 SAVE_RESULTS = False
 PRINT_PATH = "results/"
 SAVE_PATH = PRINT_PATH + "out/"
+
 
 ###################################################################
 # UTILITY FUNCTIONS
@@ -1253,6 +1268,7 @@ def main():
             df.to_csv(SAVE_PATH + filename + ".csv", index=False)
     except Exception as ex:
         print(ex)
+
 
 if __name__ == "__main__":
     main()

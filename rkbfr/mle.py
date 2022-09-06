@@ -1,3 +1,9 @@
+# encoding: utf-8
+
+"""
+Numerical approximation of the MLE in functional models.
+"""
+
 from __future__ import annotations
 
 from multiprocessing import Pool

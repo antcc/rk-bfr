@@ -1,5 +1,10 @@
 # encoding: utf-8
 
+"""
+File with classes and functions useful to manipulate the Bayesian aspects
+of our model (parameter space, posterior predictive generation, prediction, ...)
+"""
+
 from typing import Any, Callable, Dict, Optional, Union
 
 import aesara.tensor as at
@@ -45,6 +50,7 @@ class LogSq():
 
     def backward(self, y):
         return np.exp(y)**2
+
 
 ##
 # PARAMETER SPACE
