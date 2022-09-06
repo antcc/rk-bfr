@@ -14,6 +14,8 @@ A Bayesian framework for functional linear and logistic regression models, built
 
 ## Usage
 
-There are some experiments (with both simulated and real data) available to test the performance of the models against other usual alternatives, functional or otherwise. The script `results_cv.py` runs the experiments with a cross-validation loop for our Bayesian models, while the script `results_all.py` runs the experiments for all hyperparameters without a cross-validation loop. A typical execution can be seen in the `launch.sh` file, and there are two Jupyter notebooks that demonstrate the usage of the code.
+There are some experiments (with both simulated and real data) available to test the performance of the models against other usual alternatives, functional or otherwise. The script `results_cv.py` runs the experiments with a cross-validation loop for our Bayesian models, while the script `results_all.py` runs the experiments for all hyperparameters without a cross-validation loop. 
+
+A typical execution can be seen in the `launch.sh` file, and there are two Jupyter notebooks that demonstrate the usage of the code.
 
 *Code developed for Python 3.9.*
