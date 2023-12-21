@@ -4,7 +4,7 @@ This package was developed as part of my [master's thesis](https://github.com/an
 
 # rk-bfr
 
-A Bayesian framework for functional linear and logistic regression models, built on the theory of RKHS's. An overview of the model is available on Chapter 3 [here](https://github.com/antcc/tfm/releases/download/v1.2/masters-thesis.pdf) or Section 2 [here](https//github.com/antcc/rk-bfr-preprint/download/v1.0/paper.pdf).
+A Bayesian framework for functional linear and logistic regression models, built on the theory of RKHS's. An overview of the model is available on Chapter 3 [here](https://github.com/antcc/tfm/releases/download/v1.2/masters-thesis.pdf) or Section 2 [here](https//github.com/antcc/rk-bfr-preprint/releases/download/v1.0/paper.pdf).
 
 ## Code structure
 
