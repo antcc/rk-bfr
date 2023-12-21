@@ -1,0 +1,60 @@
+
+*** Bayesian-RKHS Functional Linear Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+N_reps MLE: 4
+
+-- MODEL GENERATION --
+Total samples: 268
+Grid size: 115
+Train size: 178
+Smoothing: None
+Data name: sugar
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+Values of η: [0.0001, 0.001, 0.01, 0.1, 1, 10, 100]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 900 + 100
+Burn: 400
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE METHODS --
+Mean split execution time: 42.062±3.315 s
+Total splits execution time: 7.010 min
+
+   Estimator  Mean RMSE  SD RMSE  Mean rRMSE  SD rRMSE
+       ridge      1.952    0.235       0.542     0.029
+   pca+ridge      1.963    0.234       0.545     0.029
+       lasso      1.975    0.199       0.549     0.027
+  fpca+ridge      1.976    0.227       0.548     0.026
+        flin      1.978    0.210       0.551     0.040
+manual+ridge      1.987    0.227       0.552     0.033
+       fpls1      1.993    0.223       0.554     0.042
+   pls+ridge      2.012    0.218       0.559     0.026
+   rmh+ridge      2.031    0.216       0.565     0.034
+        pls1      2.045    0.190       0.569     0.032
+        apls      2.050    0.238       0.569     0.024
+
+-- RESULTS EMCEE --
+Mean split execution time: 17079.950±404.379 s
+Total splits execution time: 2846.658 min
+
+           Estimator  Mean RMSE  SD RMSE  Mean rRMSE  SD rRMSE
+  emcee_median+ridge      1.995    0.219       0.555     0.040
+    emcee_mean+ridge      2.020    0.198       0.562     0.039
+    emcee_mode+ridge      2.037    0.200       0.567     0.046
+          emcee_mode      2.628    0.700       0.744     0.250
+emcee_posterior_mean      2.813    0.897       0.780     0.229
+        emcee_median      3.130    2.584       0.863     0.671
+          emcee_mean      9.207    9.248       2.535     2.367

@@ -1,0 +1,60 @@
+
+*** Bayesian-RKHS Functional Linear Regression ***
+
+-- GENERAL INFORMATION --
+Random seed: 2022
+N_cores: 4
+Random train/test splits: 10
+CV folds: 5
+N_reps MLE: 4
+
+-- MODEL GENERATION --
+Total samples: 100
+Grid size: 101
+Train size: 66
+Smoothing: None
+Data name: moisture
+
+-- BAYESIAN RKHS MODEL --
+Number of components (p): [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+Values of η: [0.0001, 0.001, 0.01, 0.1, 1, 10, 100]
+g = 5.0
+
+-- EMCEE SAMPLER --
+N_walkers: 64
+N_iters: 900 + 100
+Burn: 400
+Frac_random: 0.3
+Moves:
+  StretchMove, 0.7
+  WalkMove, 0.3
+
+-- RESULTS REFERENCE METHODS --
+Mean split execution time: 29.537±3.468 s
+Total splits execution time: 4.923 min
+
+   Estimator  Mean RMSE  SD RMSE  Mean rRMSE  SD rRMSE
+       ridge      0.221    0.026       0.165     0.020
+   pls+ridge      0.226    0.025       0.168     0.021
+   pca+ridge      0.226    0.027       0.169     0.022
+        pls1      0.228    0.023       0.170     0.020
+manual+ridge      0.228    0.026       0.170     0.020
+        apls      0.234    0.031       0.175     0.025
+       fpls1      0.236    0.038       0.176     0.027
+       lasso      0.242    0.028       0.181     0.024
+        flin      0.257    0.026       0.192     0.019
+  fpca+ridge      0.289    0.035       0.215     0.031
+   rmh+ridge      0.327    0.086       0.244     0.062
+
+-- RESULTS EMCEE --
+Mean split execution time: 15814.382±265.592 s
+Total splits execution time: 2635.730 min
+
+           Estimator  Mean RMSE  SD RMSE  Mean rRMSE  SD rRMSE
+emcee_posterior_mean      0.255    0.039       0.191     0.036
+  emcee_median+ridge      0.260    0.034       0.194     0.030
+    emcee_mean+ridge      0.262    0.043       0.196     0.037
+        emcee_median      0.296    0.051       0.220     0.034
+          emcee_mode      0.301    0.049       0.224     0.036
+    emcee_mode+ridge      0.302    0.092       0.224     0.065
+          emcee_mean      1.268    1.096       0.953     0.832
