@@ -1,10 +1,10 @@
-This package was developed as part of my [master's thesis](https://github.com/antcc/tfm), which has since been rewritten and expanded as [an article](https//github.com/antcc/rk-bfr-preprint).
+This package was developed as part of my [master's thesis](https://github.com/antcc/tfm), which has since been rewritten and expanded as [an article](https://github.com/antcc/rk-bfr-preprint).
 
 ------------
 
 # rk-bfr
 
-A Bayesian framework for functional linear and logistic regression models, built on the theory of RKHS's. An overview of the model is available on Chapter 3 [here](https://github.com/antcc/tfm/releases/download/v1.2/masters-thesis.pdf) or Section 2 [here](https//github.com/antcc/rk-bfr-preprint/releases/download/v1.0/paper.pdf).
+A Bayesian framework for functional linear and logistic regression models, built on the theory of RKHS's. An overview of the models is available on Chapter 3 [here](https://github.com/antcc/tfm/releases/download/v1.2/masters-thesis.pdf) or Section 2 [here](https://arxiv.org/pdf/2312.14086)
 
 ## Code structure
 
