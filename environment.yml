@@ -8,4 +8,4 @@ dependencies:
   - emcee=3.1.4
   - scikit-learn=1.4.0
   - scipy=1.11.4
-  - scikit-fda==0.9.1
+  - scikit-fda=0.9.1
