@@ -7,14 +7,13 @@ of our model (parameter space, posterior predictive generation, prediction, ...)
 
 from typing import Any, Callable, Dict, Optional, Union
 
-import aesara.tensor as at
 import numpy as np
 import pymc as pm
+import pytensor.tensor as at
 from scipy.special import expit
 from scipy.stats import beta as beta_dist
 
 from .utils import apply_threshold, compute_mode_xarray
-
 
 ##
 # TRANSFORMATIONS
@@ -78,7 +77,7 @@ class ThetaSpace():
     tau_range : type
         Range of the parameter tau.
     beta_range : type
-        Range of the parameter theta.
+        Range of the parameter beta.
     sigma2_ub : type
         Upper bound of the parameter sigma2.
     tau_ttr : type
@@ -691,7 +690,6 @@ def neg_ll_linear(*args, **kwargs):
 def neg_ll_logistic(*args, **kwargs):
     return -log_likelihood_logistic(*args, **kwargs)
 
-
 #
 # Log-posterior for linear and logistic regression
 #
@@ -834,9 +832,8 @@ def make_model_linear_pymc(
         else:
             p = p_max
 
-        alpha0_and_log_sigma = pm.Flat(
-            ts.names[ts.alpha0_idx] + "_and_" + ts.names_ttr[ts.sigma2_idx],
-            shape=2
+        alpha0_and_log_sigma = pm.Flat(  # WRONG (?)
+            ts.names[ts.alpha0_idx] + "_and_" + ts.names_ttr[ts.sigma2_idx], shape=2
         )
 
         alpha0 = pm.Deterministic(
@@ -862,27 +859,15 @@ def make_model_linear_pymc(
         idx = np.abs(ts.grid - tau_red[:, np.newaxis]).argmin(1)
         X_tau = X_pm[:, idx]
 
-        G_tau = pm.math.matrix_dot(X_tau.T, X_tau)
+        G_tau = pm.math.dot(X_tau.T, X_tau)
         G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
         G_tau_reg = G_tau + eta * \
             at.max(at.nlinalg.eigh(G_tau)[0])*at.eye(p)
 
-        def beta_lprior(value, p, log_sigma, sigma2, G_tau_reg):
-            b = (value - b0)[:p]
-            G_log_det = pm.math.logdet(G_tau_reg)
-
-            return (0.5*G_log_det
-                    - p*log_sigma
-                    - pm.math.matrix_dot(b.T, G_tau_reg, b)/(2.*g*sigma2))
-
-        beta_unbounded = pm.DensityDist(
+        beta_unbounded = pm.MvNormal(
             ts.names[ts.beta_idx_grouped] + "_unbounded",
-            p,
-            log_sigma,
-            sigma2,
-            G_tau_reg,
-            logp=beta_lprior,
-            shape=3
+            mu=b0,
+            tau=G_tau_reg / (g * sigma2),
         )
 
         # Restrict values of beta
@@ -903,7 +888,7 @@ def make_model_linear_pymc(
             )
 
         beta_red = beta[:p]
-        expected_obs = alpha0 + pm.math.matrix_dot(X_tau, beta_red)
+        expected_obs = alpha0 + pm.math.dot(X_tau, beta_red)
 
         y_obs = pm.Normal('y_obs', mu=expected_obs, sigma=sigma, observed=y)
 
@@ -964,27 +949,15 @@ def make_model_logistic_pymc(
         idx = np.abs(ts.grid - tau_red[:, np.newaxis]).argmin(1)
         X_tau = X_pm[:, idx]
 
-        G_tau = pm.math.matrix_dot(X_tau.T, X_tau)
+        G_tau = pm.math.dot(X_tau.T, X_tau)
         G_tau = (G_tau + G_tau.T)/2.  # Enforce symmetry
         G_tau_reg = G_tau + eta * \
             at.max(at.nlinalg.eigh(G_tau)[0])*at.eye(p)
 
-        def beta_lprior(value, p, log_sigma, sigma2, G_tau_reg):
-            b = (value - b0)[:p]
-            G_log_det = pm.math.logdet(G_tau_reg)
-
-            return (0.5*G_log_det
-                    - p*log_sigma
-                    - pm.math.matrix_dot(b.T, G_tau_reg, b)/(2.*g*sigma2))
-
-        beta_unbounded = pm.DensityDist(
+        beta_unbounded = pm.MvNormal(
             ts.names[ts.beta_idx_grouped] + "_unbounded",
-            p,
-            log_sigma,
-            sigma2,
-            G_tau_reg,
-            logp=beta_lprior,
-            shape=3
+            mu=b0,
+            tau=G_tau_reg / (g * sigma2),
         )
 
         # Restrict values of beta
@@ -1007,8 +980,7 @@ def make_model_logistic_pymc(
         beta_red = beta[:p]
 
         px = pm.Deterministic(
-            'p_star',
-            pm.math.invlogit(alpha0 + pm.math.matrix_dot(X_tau, beta_red))
+            "p_star", pm.math.invlogit(alpha0 + pm.math.dot(X_tau, beta_red))
         )
 
         y_obs = pm.Bernoulli('y_obs', p=px, observed=y)

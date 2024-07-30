@@ -25,27 +25,39 @@ import emcee
 import numpy as np
 import pandas as pd
 import pymc as pm
-import utils.simulation_utils as simulation
-from reference_methods._fpls import FPLSBasis
-from rkbfr.bayesian_model import ThetaSpace, probability_to_label
-from rkbfr.mcmc_sampler import (BFLinearEmcee, BFLinearPymc, BFLogisticEmcee,
-                                BFLogisticPymc)
-from rkbfr.mle import compute_mle
-from skfda.datasets import (fetch_cran, fetch_growth, fetch_medflies,
-                            fetch_phoneme, fetch_tecator)
+from skfda.datasets import (
+    fetch_cran,
+    fetch_growth,
+    fetch_medflies,
+    fetch_phoneme,
+    fetch_tecator,
+)
 from skfda.exploratory.depth import IntegratedDepth, ModifiedBandDepth
 from skfda.preprocessing.smoothing import BasisSmoother
-from skfda.preprocessing.smoothing.kernel_smoothers import \
-    NadarayaWatsonSmoother as NW
+from skfda.preprocessing.smoothing.kernel_smoothers import NadarayaWatsonSmoother as NW
 from skfda.representation.basis import BSpline, Fourier
 from skfda.representation.grid import FDataGrid
 from sklearn.linear_model import LogisticRegressionCV, RidgeCV
-from sklearn.metrics import accuracy_score, mean_squared_error
+from sklearn.metrics import accuracy_score, root_mean_squared_error
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
-from utils.run_utils import (bayesian_variable_selection_predict, cv_sk,
-                             linear_regression_comparison_suite,
-                             logistic_regression_comparison_suite)
+
+import utils.simulation_utils as simulation
+from reference_methods._fpls import FPLSBasis
+from rkbfr.bayesian_model import ThetaSpace, probability_to_label
+from rkbfr.mcmc_sampler import (
+    BFLinearEmcee,
+    BFLinearPymc,
+    BFLogisticEmcee,
+    BFLogisticPymc,
+)
+from rkbfr.mle import compute_mle
+from utils.run_utils import (
+    bayesian_variable_selection_predict,
+    cv_sk,
+    linear_regression_comparison_suite,
+    logistic_regression_comparison_suite,
+)
 from utils.sklearn_utils import DataMatrix, PLSRegressionWrapper
 
 ###################################################################
@@ -116,8 +128,12 @@ def get_arg_parser():
         "-c", "--n-cores", type=int, default=1,
         help="number of cores for paralellization (-1 to use all)")
     parser.add_argument(
-        "-r", "--n-reps", type=int, default=1,
-        help="number of random train/test splits for robustness")
+        "-r",
+        "--n-reps",
+        type=int,
+        default=2,
+        help="number of random train/test splits for robustness",
+    )
     parser.add_argument(
         "-k", "--n-folds", type=int, default=2,
         help="number of folds for CV in hyperparameter tuning"
@@ -133,8 +149,10 @@ def get_arg_parser():
         help="number of grid points for functional regressors"
     )
     parser.add_argument(
-        "--smoothing", default="nw", choices=["none", "nw", "basis"],
-        help="smooth functional data as part of preprocessing"
+        "--smoothing",
+        default="none",
+        choices=["none", "nw", "basis"],
+        help="smooth functional data as part of preprocessing",
     )
     parser.add_argument(
         "--train-size", type=float, default=0.5,
@@ -152,12 +170,17 @@ def get_arg_parser():
 
     # Optional MCMC arguments
     parser.add_argument(
-        "--n-walkers", type=int, default=4,
-        help="number of independent chains in MCMC algorithm"
+        "--n-walkers",
+        type=int,
+        default=16,
+        help="number of independent chains in MCMC algorithm",
     )
+    # Always make sure that n_iters > n_burn
     parser.add_argument(
-        "--n-iters", type=int, default=100,
-        help="number of iterations in MCMC algorithm"
+        "--n-iters",
+        type=int,
+        default=300,
+        help="total number of iterations in MCMC algorithm",
     )
     parser.add_argument(
         "--n-tune", type=int, default=100,
@@ -168,13 +191,18 @@ def get_arg_parser():
         help="number of initial samples to discard in MCMC algorithm"
     )
     parser.add_argument(
-        "--n-reps-mle", type=int, default=4,
-        help="number of random repetitions of MLE computation"
+        "--n-reps-mle",
+        type=int,
+        default=2,
+        help="number of random repetitions of MLE computation",
     )
     parser.add_argument(
-        "--eta-range", type=int, metavar=("ETA_MIN", "ETA_MAX"),
-        nargs=2, default=[-1, 1],
-        help="range of the parameter η (in logarithmic space)"
+        "--eta-range",
+        type=int,
+        metavar=("ETA_MIN", "ETA_MAX"),
+        nargs=2,
+        default=[-2, -1],
+        help="range of the parameter η (in logarithmic space)",
     )
     parser.add_argument(
         "--g", type=float, default=5.0,
@@ -537,7 +565,7 @@ def get_reference_models_logistic(X, y, seed):
     params_select = {"selector__p": n_selected}
     params_dim_red = {"dim_red__n_components": n_components}
     params_var_sel = {"var_sel__n_features_to_select": n_components}
-    params_flr = {"clf__p": n_components}
+    params_flr = {"clf__max_features": n_components}
     params_knn = {"clf__n_neighbors": n_neighbors,
                   "clf__weights": ['uniform', 'distance']}
     params_depth = {"clf__depth_method": [
@@ -760,8 +788,7 @@ def bayesian_cv(
                 y_pred_cv = est_bayesian.predict(
                     X_test_cv, strategy=strategy)
                 if kind == "linear":
-                    score = -mean_squared_error(
-                        y_test_cv, y_pred_cv, squared=False)
+                    score = -root_mean_squared_error(y_test_cv, y_pred_cv)
                 else:
                     score = accuracy_score(y_test_cv, y_pred_cv)
                 score_bayesian_cv[strategy][(i, *idx)] = score
@@ -775,8 +802,7 @@ def bayesian_cv(
                     X_train_cv, y_train_cv, X_test_cv,
                     pe, est_bayesian, est_multiple)
                 if kind == "linear":
-                    score = -mean_squared_error(
-                        y_test_cv, y_pred_cv, squared=False)
+                    score = -root_mean_squared_error(y_test_cv, y_pred_cv)
                 else:
                     score = accuracy_score(y_test_cv, y_pred_cv)
                 score_var_sel_cv[pe][(i, *idx)] = score
@@ -1023,11 +1049,11 @@ def main():
                     stratify=y, random_state=seed + rep)
 
             # Standardize data (always center regressors)
-            X_train, X_test = simulation.standardize_predictors(
-                X_train, X_test, scale=args.standardize)
+            X_train, X_test, _, _ = simulation.standardize_predictors(
+                X_train, X_test, scale=args.standardize
+            )
             if args.standardize and args.kind == "linear":
-                y_train, y_test = simulation.standardize_response(
-                    y_train, y_test)
+                y_train, y_test, _, _ = simulation.standardize_response(y_train, y_test)
 
             ##
             # RUN REFERENCE ALGORITHMS
@@ -1162,8 +1188,7 @@ def main():
                 y_pred_bayesian = estimator_bayesian.predict(
                     X_test, strategy=strategy)
                 if args.kind == "linear":
-                    score_bayesian = mean_squared_error(
-                        y_test, y_pred_bayesian, squared=False)
+                    score_bayesian = root_mean_squared_error(y_test, y_pred_bayesian)
                     rrmse_bayesian_best[strategy].append(
                         score_bayesian/np.std(y_test))
                 else:
@@ -1181,8 +1206,7 @@ def main():
                     X_train, y_train, X_test, pe,
                     estimator_var_sel, est_multiple)
                 if args.kind == "linear":
-                    score_var_sel = mean_squared_error(
-                        y_test, y_pred_var_sel, squared=False)
+                    score_var_sel = root_mean_squared_error(y_test, y_pred_var_sel)
                     rrmse_var_sel_best[pe].append(
                         score_var_sel/np.std(y_test))
                 else:

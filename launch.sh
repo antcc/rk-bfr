@@ -9,8 +9,8 @@ SMOOTHING=${6-"none"}  # 'none', 'nw' (Nadaraya-Watson) or 'basis'
 MOVES=${7-"sw"}  # 'sw', 'de' or 's'
 
 python -Wignore results_cv.py \
-  ${KIND} \
-  ${METHOD} \
+	${KIND} \
+	${METHOD} \
 	${DATA} \
 	--kernel ${KERNEL} \   # For real data use --data-name [NAME]
 	--p-range 1 10 \
@@ -25,8 +25,8 @@ python -Wignore results_cv.py \
 	--n-walkers 64 \
 	--n-iters 900 \
 	--n-tune 100 \
-  --n-burn 400 \
-  --n-reps-mle 4 \
+	--n-burn 400 \
+	--n-reps-mle 4 \
 	--eta-range -4 2 \
 	--g 5 \
 	--frac-random 0.3 \

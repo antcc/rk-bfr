@@ -8,30 +8,31 @@ try:
 except ImportError:
     pass
 
-from reference_methods._flda import FLDA
-from reference_methods._fpls import APLS, FPLS
-from rkbfr.utils import IgnoreWarnings
-from skfda.ml.classification import KNeighborsClassifier
+from skfda.ml.classification import KNeighborsClassifier, MaximumDepthClassifier
 from skfda.ml.classification import LogisticRegression as FLR
-from skfda.ml.classification import MaximumDepthClassifier
 from skfda.ml.classification import NearestCentroid as FNC
 from skfda.ml.regression import LinearRegression as FLinearRegression
 from skfda.preprocessing.dim_reduction.feature_extraction import FPCA
-from skfda.preprocessing.dim_reduction.variable_selection import \
-    RecursiveMaximaHunting as RMH
-from skfda.preprocessing.dim_reduction.variable_selection import \
-    RKHSVariableSelection as RKVS
+from skfda.preprocessing.dim_reduction.variable_selection import (
+    RecursiveMaximaHunting as RMH,
+)
+from skfda.preprocessing.dim_reduction.variable_selection import (
+    RKHSVariableSelection as RKVS,
+)
 from skfda.representation.basis import FDataBasis
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis as QDA
 from sklearn.linear_model import Lasso, LogisticRegression, Ridge
-from sklearn.metrics import accuracy_score, mean_squared_error, r2_score
+from sklearn.metrics import accuracy_score, r2_score, root_mean_squared_error
 from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import NearestCentroid
 from sklearn.pipeline import Pipeline
-from utils.sklearn_utils import (Basis, DataMatrix, FeatureSelector,
-                                 PLSRegressionWrapper)
+
+from reference_methods._flda import FLDA
+from reference_methods._fpls import APLS, FPLS
+from rkbfr.utils import IgnoreWarnings
+from utils.sklearn_utils import Basis, DataMatrix, FeatureSelector, PLSRegressionWrapper
 
 
 def linear_regression_metrics(
@@ -43,18 +44,18 @@ def linear_regression_metrics(
     sort_by=-2,
 ):
     if df is None:
-        results_columns = ["Estimator", "Features", "RMSE", "rRMSE", r"$R^2$"]
+        results_columns = ["Estimator", "Features", "RMSE", "rRMSE"]
         df = pd.DataFrame(columns=results_columns)
 
-    r2 = r2_score(y_true, y_pred)
-    rmse = mean_squared_error(y_true, y_pred, squared=False)
+    # r2 = r2_score(y_true, y_pred)
+    rmse = root_mean_squared_error(y_true, y_pred)
     rrmse = rmse/np.std(y_true)
     df.loc[len(df)] = [
         predictor_name,
         n_features,
         rmse,
         rrmse,
-        r2
+        # r2
     ]
 
     df.sort_values(df.columns[sort_by], inplace=True)
@@ -448,12 +449,13 @@ def linear_regression_comparison_suite(
                        ))
 
     # PLS1 regression
-    regressors.append(("pls1",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("reg", PLSRegressionWrapper())]),
-                       params_pls
-                       ))
+    regressors.append(
+        (
+            "pls1",
+            Pipeline([("data_matrix", DataMatrix()), ("reg", PLSRegressionWrapper())]),
+            params_pls,
+        )
+    )
 
     """
     VARIABLE SELECTION + MULTIVARIATE MODELS
@@ -469,12 +471,18 @@ def linear_regression_comparison_suite(
                        ))
 
     # FPCA+Ridge
-    regressors.append(("fpca+ridge",
-                       Pipeline([
-                           ("dim_red", FPCA()),  # Retains scores only
-                           ("reg", Ridge())]),
-                       {**params_dim_red, **params_regularizer}
-                       ))
+    regressors.append(
+        (
+            "fpca+ridge",
+            Pipeline(
+                [
+                    ("dim_red", FPCA(n_components=3)),  # Retains scores only
+                    ("reg", Ridge()),
+                ]
+            ),
+            {**params_dim_red, **params_regularizer},
+        )
+    )
 
     """
     TARDA DEMASIADO (búsqueda en CV demasiado grande?)
@@ -500,21 +508,27 @@ def linear_regression_comparison_suite(
                        ))
 
     # PLS+Ridge
-    regressors.append(("pls+ridge",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("dim_red", PLSRegressionWrapper()),
-                           ("reg", Ridge())]),
-                       {**params_dim_red, **params_regularizer}
-                       ))
+    regressors.append(
+        (
+            "pls+ridge",
+            Pipeline(
+                [
+                    ("data_matrix", DataMatrix()),
+                    ("dim_red", PLSRegressionWrapper()),
+                    ("reg", Ridge()),
+                ]
+            ),
+            {**params_dim_red, **params_regularizer},
+        )
+    )
 
     # RMH+Ridge
-    regressors.append(("rmh+ridge",
+    """regressors.append(("rmh+ridge",
                        Pipeline([
                            ("var_sel", RMH()),
                            ("reg", Ridge())]),
                        params_regularizer
-                       ))
+                       ))"""
 
     """
     FUNCTIONAL MODELS
@@ -630,13 +644,18 @@ def logistic_regression_comparison_suite(
                         ))
 
     # FPCA+LR
-    classifiers.append(("fpca+log",
-                       Pipeline([
-                           ("dim_red", FPCA()),  # Retains scores only
-                           ("clf", LogisticRegression(
-                               random_state=random_state))]),
-                       {**params_dim_red, **params_clf}
-                        ))
+    classifiers.append(
+        (
+            "fpca+log",
+            Pipeline(
+                [
+                    ("dim_red", FPCA(n_components=3)),  # Retains scores only
+                    ("clf", LogisticRegression(random_state=random_state)),
+                ]
+            ),
+            {**params_dim_red, **params_clf},
+        )
+    )
 
     # PCA+LR
     classifiers.append(("pca+log",
@@ -649,14 +668,19 @@ def logistic_regression_comparison_suite(
                         ))
 
     # PLS+LR
-    classifiers.append(("pls+log",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("dim_red", PLSRegressionWrapper()),
-                           ("clf", LogisticRegression(
-                               random_state=random_state))]),
-                       {**params_dim_red, **params_clf}
-                        ))
+    classifiers.append(
+        (
+            "pls+log",
+            Pipeline(
+                [
+                    ("data_matrix", DataMatrix()),
+                    ("dim_red", PLSRegressionWrapper()),
+                    ("clf", LogisticRegression(random_state=random_state)),
+                ]
+            ),
+            {**params_dim_red, **params_clf},
+        )
+    )
 
     # APLS+LR
     classifiers.append(("apls+log",
@@ -677,13 +701,13 @@ def logistic_regression_comparison_suite(
                         ))
 
     # RMH+LR
-    classifiers.append(("rmh+log",
+    """classifiers.append(("rmh+log",
                        Pipeline([
                            ("var_sel", RMH()),
                            ("clf", LogisticRegression(
                                random_state=random_state))]),
                        params_clf
-                        ))
+                        ))"""
 
     # PCA+QDA (Galeano et al. 2015)
     classifiers.append(("pca+qda",
@@ -695,13 +719,19 @@ def logistic_regression_comparison_suite(
                         ))
 
     # PLS+Nearest centroid
-    classifiers.append(("pls+nc",
-                       Pipeline([
-                           ("data_matrix", DataMatrix()),
-                           ("dim_red", PLSRegressionWrapper()),
-                           ("clf", NearestCentroid())]),
-                       params_dim_red
-                        ))
+    classifiers.append(
+        (
+            "pls+nc",
+            Pipeline(
+                [
+                    ("data_matrix", DataMatrix()),
+                    ("dim_red", PLSRegressionWrapper()),
+                    ("clf", NearestCentroid()),
+                ]
+            ),
+            params_dim_red,
+        )
+    )
 
     # APLS+Nearest centroid (Delaigle and Hall 2012)
     classifiers.append(("apls+nc",
@@ -715,12 +745,8 @@ def logistic_regression_comparison_suite(
     FUNCTIONAL MODELS
     """
 
-    # Functional logistic regression (Berrendero et al. 2021)
-    classifiers.append(("flog",
-                       Pipeline([
-                           ("clf", FLR())]),
-                       params_flr
-                        ))
+    # Functional logistic regression (Berrendero et al. 2023)
+    classifiers.append(("flog", Pipeline([("clf", FLR())]), params_flr))
 
     # FLDA (based on PLS1 regression, see Preda and Saporta 2007)
     classifiers.append(("flda",

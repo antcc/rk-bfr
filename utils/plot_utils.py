@@ -34,10 +34,12 @@ def plot_dataset_regression(
             grid, np.mean(X, axis=0),
             linewidth=3, color='k',
             label="Sample mean")
-        axs[0].legend()
+        axs[0].legend(fontsize=10)
 
-        axs[1].axvline(y.mean(), ls="--", lw=2, color="r", label="Sample mean")
-        axs[1].legend()
+        axs[1].axvline(
+            y.mean(), ls="--", lw=1.5, color="r", alpha=0.5, label="Sample mean"
+        )
+        axs[1].legend(fontsize=10)
 
 
 def plot_dataset_classification(

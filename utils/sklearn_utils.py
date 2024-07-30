@@ -5,7 +5,6 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.utils.validation import check_is_fitted
 
-
 # -- Sklearn CV and transformers
 
 class FeatureSelector(BaseEstimator, TransformerMixin):

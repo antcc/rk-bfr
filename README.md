@@ -1,4 +1,4 @@
-This package was developed as part of my [master's thesis](https://github.com/antcc/tfm), which has since been rewritten and expanded as [an article](https://github.com/antcc/rk-bfr-preprint).
+This package was developed as part of my [master's thesis](https://github.com/antcc/tfm), which has since been rewritten and expanded as [an article](https://github.com/antcc/rk-bfr-preprint). An improved version of this package that uses RJMCMC samplers is available [here](https://github.com/antcc/rk-bfr-jump).
 
 ------------
 
@@ -13,10 +13,6 @@ A Bayesian framework for functional linear and logistic regression models, built
 - The folder `utils` contains several utility files for experimentation and visualization.
 - The `experiments` folder contains plain text files with numerical experimental results, as well as `.csv` and `.npz` files that facilitate working with them directly in Python.
 
-## Usage
-
-There are some experiments (with both simulated and real data) available to test the performance of the models against other usual alternatives, functional or otherwise. The script `results_cv.py` runs the experiments with a cross-validation loop for our Bayesian models, while the script `results_all.py` runs the experiments for all hyperparameters without a cross-validation loop. 
-
-A typical execution can be seen in the `launch.sh` file, and additionally there are two Jupyter notebooks that demonstrate the usage of the code.
+There are some experiments (with both simulated and real data) available to test the performance of the models against other usual alternatives, functional or otherwise. The script `results_cv.py` runs the experiments with a cross-validation loop for our Bayesian models, while the script `results_all.py` runs the experiments for all hyperparameters without a cross-validation loop. A typical execution can be seen in the `launch.sh` file, and additionally there are two Jupyter notebooks that demonstrate the usage of the code.
 
 *Code developed for Python 3.9.*

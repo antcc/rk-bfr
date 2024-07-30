@@ -11,27 +11,38 @@ import warnings
 
 import arviz as az
 import numpy as np
+import sklearn.exceptions
 import xarray as xr
 from scipy.stats import mode
 from skfda.representation.basis import FDataBasis
 from skfda.representation.grid import FDataGrid
 
-
 # Custom context managers for handling warnings
 
-class IgnoreWarnings():
+class IgnoreWarnings:
     key = "PYTHONWARNINGS"
 
     def __enter__(self):
         if self.key in os.environ:
-            self.state = os.environ["PYTHONWARNINGS"]
+            self.state = os.environ[self.key]
         else:
             self.state = "default"
-        os.environ["PYTHONWARNINGS"] = "ignore"
+
+        os.environ[self.key] = "ignore"
+        warnings.filterwarnings("ignore", category=sklearn.exceptions.FitFailedWarning)
+        warnings.filterwarnings(
+            "ignore", category=sklearn.exceptions.ConvergenceWarning
+        )
+        warnings.filterwarnings(
+            "ignore",
+            category=UserWarning,
+            message="One or more of the test scores are non-finite:",
+        )
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
-        os.environ["PYTHONWARNINGS"] = self.state
+        warnings.resetwarnings()
+        os.environ[self.key] = self.state
 
 
 class HandleLogger():
@@ -157,10 +168,14 @@ def mode_fn(values, skipna=False, bw='experimental'):
         warnings.warn("Your data appears to have NaN values.")
 
     if values.dtype.kind == "f":
+        # If only one value, that value is the mode
+        if np.allclose(values, values[0]):
+            return values[0]
+
         x, density = az.kde(values, bw=bw)
         return x[np.argmax(density)]
     else:
-        return mode(values)[0][0]
+        return mode(values, keepdims=False).mode
 
 
 def compute_mode_xarray(

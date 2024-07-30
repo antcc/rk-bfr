@@ -29,20 +29,38 @@ from scipy.stats import norm
 from skfda.representation import FData
 from skfda.representation.basis import FDataBasis
 from skfda.representation.grid import FDataGrid
-from sklearn.base import (BaseEstimator, ClassifierMixin, RegressorMixin,
-                          TransformerMixin)
+from sklearn.base import (
+    BaseEstimator,
+    ClassifierMixin,
+    RegressorMixin,
+    TransformerMixin,
+)
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.utils.validation import check_is_fitted
 
 from .autocorr import integrated_time
-from .bayesian_model import (PriorType, RandomType, ThetaSpace, generate_pp,
-                             log_posterior_linear, log_posterior_logistic,
-                             log_prior_linear_logistic, make_model_linear_pymc,
-                             make_model_logistic_pymc, point_estimate,
-                             point_predict)
+from .bayesian_model import (
+    PriorType,
+    RandomType,
+    ThetaSpace,
+    generate_pp,
+    log_posterior_linear,
+    log_posterior_logistic,
+    log_prior_linear_logistic,
+    make_model_linear_pymc,
+    make_model_logistic_pymc,
+    point_estimate,
+    point_predict,
+)
 from .mle import compute_mle
-from .utils import (HandleLogger, apply_threshold, check_random_state,
-                    fdata_to_numpy, mode_fn, relabel_sample)
+from .utils import (
+    HandleLogger,
+    apply_threshold,
+    check_random_state,
+    fdata_to_numpy,
+    mode_fn,
+    relabel_sample,
+)
 
 DataType = Union[
     FData,
@@ -891,6 +909,8 @@ class _BayesianRKHSFRegressionEmcee(_BayesianRKHSFRegression):
         else:
             burn = self.burn
 
+        assert self.n_iter > burn
+
         return burn
 
     def _emcee_to_idata(self):
@@ -1228,7 +1248,9 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
             step = None
         else:
             with self.model_:
-                step = [self.step_fn(self.model_.cont_vars, **self.step_kwargs)]
+                step = [
+                    self.step_fn(self.model_.continuous_value_vars, **self.step_kwargs)
+                ]
                 if ts.include_p:
                     step.append(
                         pm.CategoricalGibbsMetropolis(self.model_.disc_vars)
@@ -1277,6 +1299,7 @@ class _BayesianRKHSFRegressionPymc(_BayesianRKHSFRegression):
 
             # Get data (after burn-in and thinning)
             self.burn_ = np.minimum(self.burn, self.n_iter//10)
+            assert self.n_iter > self.burn_
             idata = self._tidy_idata(idata)
 
             # Save trace

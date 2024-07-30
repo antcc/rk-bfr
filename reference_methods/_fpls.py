@@ -14,7 +14,6 @@ from sklearn.base import BaseEstimator, RegressorMixin, TransformerMixin
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.utils.validation import check_is_fitted
 
-
 ##
 # HELPER FUNCTIONS
 ##
@@ -129,7 +128,7 @@ class APLS(
         y = y - self.y_mean_
 
         # Estimate K(s, t)
-        K = X.cov().data_matrix[0, ..., 0]
+        K = X.cov().cov_fdata.data_matrix[0, ..., 0]
 
         # Estimate K^i(b) for i=1,...,p
         kb = self._fpls_span(data, y)
@@ -265,7 +264,4 @@ class FPLS(
 
         preds = self.base_regressor.predict(transformed_matrix)
 
-        if self.n_targets == 1:
-            return preds[:, 0]
-        else:
-            return preds
+        return preds

@@ -1,13 +1,16 @@
 # encoding: utf-8
 
 import numpy as np
-from rkbfr.bayesian_model import (ThetaSpace, apply_label_noise,
-                                  generate_response_linear)
-from rkbfr.utils import IgnoreWarnings
 from scipy.integrate import trapz
 from skfda.preprocessing.smoothing.validation import (
-    LinearSmootherGeneralizedCVScorer, SmoothingParameterSearch,
-    akaike_information_criterion)
+    LinearSmootherGeneralizedCVScorer,
+    SmoothingParameterSearch,
+    akaike_information_criterion,
+)
+from skfda.representation import FData
+
+from rkbfr.bayesian_model import ThetaSpace, apply_label_noise, generate_response_linear
+from rkbfr.utils import IgnoreWarnings
 
 
 def brownian_kernel(s, t, sigma=1.0):
@@ -94,7 +97,7 @@ def generate_rkhs_dataset(
     if rng is None:
         rng = np.random.default_rng()
 
-    X = X - X.mean(axis=0)  # The RKHS model assumes centered variables
+    X_0 = X - X.mean(axis=0)  # The RKHS model assumes centered variables
     theta_true = np.concatenate((
         beta, tau,
         [alpha0], [sigma2]
@@ -103,7 +106,8 @@ def generate_rkhs_dataset(
     p = len(beta)
     theta_space = ThetaSpace(p, grid)
     y = generate_response_linear(
-        X, theta_true, theta_space, noise=sigma2 > 0.0, rng=rng)
+        X_0, theta_true, theta_space, noise=sigma2 > 0.0, rng=rng
+    )
 
     return y
 
@@ -171,25 +175,41 @@ def smooth_data(X, smoother, params, X_test=None):
     return X_tr, best_smoother
 
 
-def standardize_response(y, y_test):
+def standardize_response(y, y_test, center=False, scale=True):
     y_m = y.mean()
     y_sd = y.std()
 
-    y_tr = (y - y_m)/y_sd
-    y_test_tr = (y_test - y_m)/y_sd
+    if center:
+        y_m_center = y_m
+    else:
+        y_m_center = 0.0
 
-    return y_tr, y_test_tr
+    if scale:
+        y_sd_scale = y_sd
+    else:
+        y_sd_scale = 1.0
+
+    y_tr = (y - y_m_center) / y_sd_scale
+    y_test_tr = (y_test - y_m_center) / y_sd_scale
+
+    return y_tr, y_test_tr, y_m, y_sd
 
 
 def standardize_predictors(X, X_test, scale=False):
     X_m = X.mean(axis=0)
+    X_sd = np.sqrt(X.var())
 
     if scale:
-        X_sd = np.sqrt(X.var())
+        X_sd_scale = X_sd
     else:
-        X_sd = 1.0
+        X_sd_scale = 1.0
 
-    X_tr = (X - X_m)/X_sd
-    X_test_tr = (X_test - X_m)/X_sd
+    X_tr = (X - X_m) / X_sd_scale
+    X_test_tr = (X_test - X_m) / X_sd_scale
 
-    return X_tr, X_test_tr
+    if isinstance(X, FData):
+        n_grid = len(X_m.grid_points[0])
+        X_m = X_m.data_matrix.reshape(n_grid)
+        X_sd = X_sd.data_matrix.reshape(n_grid)
+
+    return X_tr, X_test_tr, X_m, X_sd
