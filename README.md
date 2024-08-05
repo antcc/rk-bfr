@@ -4,7 +4,7 @@ This package was developed as part of my [master's thesis](https://github.com/an
 
 # rk-bfr
 
-A Bayesian framework for functional linear and logistic regression models, built on the theory of RKHS's. An overview of the models is available on Chapter 3 [here](https://github.com/antcc/tfm/releases/download/v1.2/masters-thesis.pdf) or Section 2 [here](https://arxiv.org/pdf/2312.14086).
+A Bayesian framework for functional linear and logistic regression models, built on the theory of RKHS's. An overview of the models is available on Chapter 3 [here](https://github.com/antcc/tfm/releases/download/v1.2/masters-thesis.pdf).
 
 ## Code structure
 
@@ -13,6 +13,6 @@ A Bayesian framework for functional linear and logistic regression models, built
 - The folder `utils` contains several utility files for experimentation and visualization.
 - The `experiments` folder contains plain text files with numerical experimental results, as well as `.csv` and `.npz` files that facilitate working with them directly in Python.
 
-There are some experiments (with both simulated and real data) available to test the performance of the models against other usual alternatives, functional or otherwise. The script `results_cv.py` runs the experiments with a cross-validation loop for our Bayesian models, while the script `results_all.py` runs the experiments for all hyperparameters without a cross-validation loop. A typical execution can be seen in the `launch.sh` file, and additionally there are two Jupyter notebooks that demonstrate the usage of the code.
+There are some experiments (with both simulated and real data) available to test the performance of the models against other usual alternatives, functional or otherwise. The script `results_cv.py` runs the experiments with a cross-validation loop for our Bayesian models, while the script `results_all.py` runs the experiments for all hyperparameters without a cross-validation loop. A typical execution can be seen in the `launch.sh` file. Additionally, there are Jupyter notebooks that demonstrate the usage of the code.
 
 *Code developed for Python 3.9.*
